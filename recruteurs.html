@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Qui recrute — les métiers du retail</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="assets/commun.css?v=4">
+</head>
+<body>
+<main>
+  <div id="nav-ici"></div>
+  <h1>Qui recrute</h1>
+  <p class="sous" id="sous">Chargement des données…</p>
+
+  <div id="filtres-ici"></div>
+
+  <div class="grille" style="margin-top:24px">
+    <div class="carte"><h3>Entreprises qui publient le plus</h3><div class="zone"><canvas id="g-entreprises"></canvas></div></div>
+    <div class="carte"><h3>Secteurs d'activité <small>— quand l'annonce le précise</small></h3><div class="zone"><canvas id="g-secteurs"></canvas></div></div>
+    <div class="carte large"><h3>Qui recrute des débutants ? <small id="sous-juniors">— les employeurs qui publient le plus d'offres ouvertes à quelqu'un sans expérience</small></h3><div class="zone haute"><canvas id="g-juniors"></canvas></div>
+      <p class="note">Une offre est comptée ici si elle est en alternance, ou si l'annonce indique « débutant accepté ». Ce sont les premiers noms à qui écrire quand on sort de formation — en gardant en tête que certains de ces publieurs sont des écoles ou des agences qui recrutent pour le compte d'autres entreprises.</p></div>
+  </div>
+
+  <h2>Les dernières offres <small id="nb-offres"></small></h2>
+  <div class="liste" id="liste-offres"></div>
+  <p class="note" style="margin-top:10px">Les douze plus récentes de votre sélection. Le reste est dans <code>data/</code> sur le dépôt.</p>
+
+  <footer id="pied"></footer>
+</main>
+
+<script src="assets/commun.js?v=4"></script>
+<script>
+/* ============ Qui recrute ============ */
+function rendre(offres, D) {
+  const lib = Commun.lib;
+  const n = offres.length;
+
+  const ent = compter(offres, o => o.entreprise).slice(0, 10);
+  zoneSelonBarres("g-entreprises", ent.length, 34);
+  barres("g-entreprises", ent.map(x => enLignes(x[0], 26)), ent.map(x => x[1]), true, " offres");
+  const sec = compter(offres, o => secteurCourt(o.secteur)).slice(0, 8);
+  barres("g-secteurs", sec.map(x => enLignes(x[0], 26)), sec.map(x => x[1]), true, " offres");
+  /* Qui recrute des débutants : les employeurs nommés, classés par nombre d'offres ouvertes
+     à quelqu'un sans expérience (alternance, ou « débutant accepté »). Deux barres distinctes :
+     postuler à une alternance et postuler à un CDI junior ne sont pas la même démarche. */
+  const juniors = offres.filter(o => o.alternance || debutantAccepte(o));
+  const ouvertes = juniors.filter(o => o.entreprise);   // les autres ne nomment pas l'employeur
+  const topJuniors = compter(ouvertes, o => o.entreprise).slice(0, 12);
+  zoneSelonBarres("g-juniors", topJuniors.length, 40);
+  const lots = topJuniors.map(([nom]) => ouvertes.filter(o => o.entreprise === nom));
+  dessiner("g-juniors", "bar",
+    { labels: topJuniors.map(x => enLignes(x[0], 30)),
+      datasets: [
+        { label: "Alternance", backgroundColor: COUL_NIV.assistant, borderRadius: 3,
+          data: lots.map(l => l.filter(o => o.alternance).length) },
+        { label: "Débutant accepté", backgroundColor: COUL_NIV.charge, borderRadius: 3,
+          data: lots.map(l => l.filter(o => !o.alternance).length) },
+      ].filter(d => d.data.some(v => v > 0)) },
+    { indexAxis: "y",
+      plugins: { legend: { display: true, position: "bottom", labels: { boxWidth: 12, boxHeight: 12, padding: 12 } },
+                 tooltip: { callbacks: { label: c => `${c.dataset.label} : ${c.parsed.x} offre${c.parsed.x > 1 ? "s" : ""}` } } },
+      scales: { x: { stacked: true, beginAtZero: true, title: { display: true, text: "nombre d'offres" } },
+                y: { stacked: true, grid: { display: true } } } });
+  document.getElementById("sous-juniors").textContent =
+    `— ${juniors.length} offres de votre sélection sont ouvertes à quelqu'un sans expérience ; ${ouvertes.length} nomment leur employeur, voici ceux qui en publient le plus`;
+
+  /* ---- Dernières offres ---- */
+  const recentes = [...offres].sort((a, b) => (b.date || "").localeCompare(a.date || "")).slice(0, 12);
+  document.getElementById("nb-offres").textContent = n ? `— les 12 plus récentes sur ${n}` : "";
+  document.getElementById("liste-offres").innerHTML = recentes.length ? recentes.map(o => {
+    const k = niv(o);
+    return `<div class="item">
+      <div class="titre">${o.url ? `<a href="${o.url}" target="_blank" rel="noopener">${o.intitule}</a>` : o.intitule}</div>
+      <div class="meta"><span>${o.entreprise || "employeur non précisé"}</span><span>·</span><span>${o.lieu || "lieu non précisé"}</span>
+        <span>·</span><span>${libContratOffre(o)}</span>
+        ${salaireCourt(o) ? `<span>·</span><span class="sal">${salaireCourt(o)}</span>` : ""}
+        <span class="etiq" style="background:${COUL_NIV[k]}${ENCRE_FONCEE.has(k) ? ";color:#1d1d1f" : ""}">${libNiv(k)}</span>
+        <span>·</span><span>publiée le ${dateFr(o.date)}</span></div>
+    </div>`;
+  }).join("") : `<p class="note">Aucune offre dans cette sélection.</p>`;
+}
+
+Commun.demarrer(rendre);
+</script>
+</body>
+</html>
