@@ -275,6 +275,7 @@ function poserNavEtFiltres() {
     `<p style="margin:0 0 8px"><a href="mouvement.html#limites">Limites de ces chiffres</a></p>
      Chaîne : API France Travail → <code>scripts/extraire.py</code> → <code>data/brut/</code> (chaque version d'annonce, une seule fois) + <code>data/actives/</code> (les offres du jour) → <code>scripts/resumer.py</code> → <code>data/resume.json</code> → ces pages (GitHub Pages).
      Deuxième canal : <a href="https://www.adzuna.fr" target="_blank" rel="noopener">The Adzuna API</a> → <code>scripts/extraire_adzuna.py</code> → <code>data/adzuna/</code>. Les offres marquées « Adzuna » : ${ADZUNA}.
+     Troisième canal : Welcome to the Jungle (plan du site) → <code>scripts/extraire_wttj.py</code> → <code>data/wttj/</code>.
      Une Action GitHub relance la collecte chaque matin à 7 h. Identifiants dans les secrets du dépôt, jamais dans le code.
      Projet étudiant — M1 Marketing, IAE Clermont Auvergne, cours d'analyse de données. D'après le dépôt de démonstration de Vincent Favarin.`;
 }
