@@ -113,10 +113,15 @@ def champ(page, cle):
     return m.group(2) if m.group(2) is not None else m.group(1)
 
 
+class SansDonnees(Exception):
+    """La page répond sans les données de l'offre : le site ne sert plus les robots (protection
+    anti-robots, page d'attente). On ne contourne pas : on compte, et on s'arrête si ça dure."""
+
+
 def lire_offre(url, s):
     """Les faits d'une offre, lus dans sa page ; None si elle n'est plus en ligne."""
     r = s.get(url, timeout=30)
-    if r.status_code == 404:
+    if r.status_code in (404, 410):
         return None
     r.raise_for_status()
     page = r.text
@@ -129,7 +134,7 @@ def lire_offre(url, s):
         if isinstance(d, dict) and d.get("@type") == "JobPosting":
             job = d
     if not job:
-        return None
+        raise SansDonnees(f"{r.status_code}, {len(page)} octets")
     lieu = ((job.get("jobLocation") or [{}])[0] or {}).get("address") or {}
     smin = smax = None
     sal = (job.get("baseSalary") or {}).get("value") or {}
@@ -188,41 +193,62 @@ def main():
                     v = json.loads(ligne)
                     lues[v["url"]] = v.get("lastmod", "")
     # Offres déjà lues et écartées (hors retail, hors France, retirées) : on ne les relit pas.
+    # Une ligne par offre : « url<TAB>motif ». Les lignes sans motif (première version du
+    # script, qui écartait aussi les pages servies sans données) sont ignorées.
     fichier_ecartees = dossier / "ecartees.txt"
-    ecartees = set(fichier_ecartees.read_text(encoding="utf-8").split()) if fichier_ecartees.exists() else set()
+    motifs = {}
+    if fichier_ecartees.exists():
+        for ligne in fichier_ecartees.read_text(encoding="utf-8").splitlines():
+            if "\t" in ligne:
+                u, m = ligne.split("\t", 1)
+                motifs[u] = m
+    ecartees = set(motifs)
     a_lire = [u for u, mod in plan.items()
               if u not in ecartees and (u not in lues or (mod and mod > lues[u]))]
     a_lire.sort(key=lambda u: u in lues)          # les nouvelles d'abord
     print(f"WTTJ : {len(a_lire)} à lire (nouvelles ou modifiées), {min(len(a_lire), MAX_PAGES)} aujourd'hui")
 
-    nouvelles = lu = erreurs = suite = 0
-    retirees = set()
+    nouvelles = lu = erreurs = sans_donnees = suite = 0
     with (dossier / "brut" / f"{aujourdhui[:7]}.jsonl").open("a", encoding="utf-8") as brut:
         for url in a_lire[:MAX_PAGES]:
             try:
                 o = lire_offre(url, s)
                 suite = 0
-            except requests.RequestException as e:
-                erreurs += 1
+            except (requests.RequestException, SansDonnees) as e:
+                # Erreur réseau ou page servie sans données : l'offre sera retentée demain.
+                if isinstance(e, SansDonnees):
+                    sans_donnees += 1
+                else:
+                    erreurs += 1
                 suite += 1
-                print(f"WTTJ : {url} — {e}")
+                print(f"WTTJ : {url} — {type(e).__name__} {e}", flush=True)
                 if suite >= MAX_ERREURS:
-                    print("WTTJ : trop d'erreurs d'affilée, arrêt pour aujourd'hui.")
+                    print("WTTJ : le site ne sert plus les pages, arrêt pour aujourd'hui.", flush=True)
                     break
-                time.sleep(PAUSE)
+                time.sleep(PAUSE * 5)
                 continue
             time.sleep(PAUSE)
-            if o is None or o.get("pays") not in (None, "FR") or not RETAIL.search(normaliser(o["titre"])):
-                retirees.add(url)
-                continue
-            lu += 1
-            nouvelles += url not in lues
-            brut.write(json.dumps({"url": url, "lastmod": plan[url], "vu_le": aujourdhui,
-                                   "rome": rome(o["titre"]), "offre": o}, ensure_ascii=False) + "\n")
-            lues[url] = plan[url]
+            if o is None:
+                motifs[url] = "retiree"
+            elif o.get("pays") not in (None, "FR"):
+                motifs[url] = "hors France"
+            elif not RETAIL.search(normaliser(o["titre"])):
+                motifs[url] = "hors retail : " + o["titre"]
+            else:
+                lu += 1
+                nouvelles += url not in lues
+                brut.write(json.dumps({"url": url, "lastmod": plan[url], "vu_le": aujourdhui,
+                                       "rome": rome(o["titre"]), "offre": o}, ensure_ascii=False) + "\n")
+                brut.flush()
+                lues[url] = plan[url]
 
-    ecartees |= retirees
-    fichier_ecartees.write_text("\n".join(sorted(u for u in ecartees if u in plan)), encoding="utf-8")
+    ecartees = set(motifs)
+    fichier_ecartees.write_text("\n".join(f"{u}\t{m}" for u, m in sorted(motifs.items()) if u in plan),
+                                encoding="utf-8")
+    compte = {}
+    for m in motifs.values():
+        compte[m.split(" :")[0]] = compte.get(m.split(" :")[0], 0) + 1
+    print(f"WTTJ : écartées au total {compte}", flush=True)
 
     # Actives du jour : présentes dans le plan, déjà lues au moins une fois, pas écartées.
     with (dossier / "actives" / f"{aujourdhui}.csv").open("w", newline="", encoding="utf-8") as f:
@@ -235,12 +261,14 @@ def main():
     if serie.exists():
         with serie.open(encoding="utf-8") as f:
             lignes = [r for r in csv.reader(f)][1:]
-    lignes = [r for r in lignes if r[0] != aujourdhui] + [[aujourdhui, len(plan), lu, nouvelles, erreurs]]
+    lignes = [r[:5] + [r[5] if len(r) > 5 else ""] for r in lignes if r[0] != aujourdhui]
+    lignes.append([aujourdhui, len(plan), lu, nouvelles, erreurs, sans_donnees])
     with serie.open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
-        w.writerow(["date", "dans_le_plan", "lues", "nouvelles", "erreurs"])
+        w.writerow(["date", "dans_le_plan", "lues", "nouvelles", "erreurs", "sans_donnees"])
         w.writerows(sorted(lignes))
-    print(f"WTTJ {aujourdhui} : {lu} offres lues ({nouvelles} nouvelles), {len(retirees)} écartées, {erreurs} erreurs.")
+    print(f"WTTJ {aujourdhui} : {lu} offres lues ({nouvelles} nouvelles), {erreurs} erreurs, "
+          f"{sans_donnees} pages sans données.", flush=True)
 
 
 if __name__ == "__main__":
