@@ -22,7 +22,9 @@ import json
 import re
 import sys
 import time
+import unicodedata
 from collections import defaultdict
+from datetime import date, timedelta
 from pathlib import Path
 
 import requests
@@ -271,9 +273,115 @@ class Geocodeur:
                 return p[0], p[1], "departement"
         return None, None, None
 
+    def code_departement(self, nom):
+        """'Loiret' -> '45' ; la liste des départements est lue une fois puis mise en cache."""
+        if not hasattr(self, "noms"):
+            self.noms = self._lire("noms_departements.json")
+            if not self.noms:
+                d = self._get(f"{GEO}/departements?fields=nom,code") or []
+                self.noms = {normaliser(x["nom"]): x["code"] for x in d}
+        return self.noms.get(normaliser(nom))
+
     def sauver(self):
         (self.dossier / "communes.json").write_text(json.dumps(self.communes), encoding="utf-8")
         (self.dossier / "departements.json").write_text(json.dumps(self.departements), encoding="utf-8")
+        if getattr(self, "noms", None):
+            (self.dossier / "noms_departements.json").write_text(json.dumps(self.noms, ensure_ascii=False), encoding="utf-8")
+
+
+def normaliser(s):
+    """'Île-de-France' -> 'ile de france' : sans accents, sans casse, sans ponctuation."""
+    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
+    return " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
+
+
+# ---------------------------------------------------------------------------
+# Deuxième canal : Adzuna (scripts/extraire_adzuna.py -> data/adzuna/brut/).
+# Adzuna ne donne pas de liste d'offres « actives » : on retient celles publiées depuis
+# moins de JOURS_ADZUNA jours. Une offre déjà présente chez France Travail (même intitulé,
+# même employeur, même département) est écartée : on garde la version France Travail,
+# plus riche (expérience, formation, compétences).
+JOURS_ADZUNA = 45
+CONTRATS_ADZUNA = {"permanent": "CDI", "contract": "CDD"}
+RAYON_FRAIS = re.compile(r"\bfrais\b|boucherie|poissonnerie|fromage|charcuterie|traiteur|boulangerie|p[âa]tisserie|fruits", re.I)
+RAYON_ALIMENTAIRE = re.compile(r"alimentaire|[ée]picerie|liquides|\bdrive\b|surgel", re.I)
+BALISES = re.compile(r"<[^>]+>")
+
+
+def cle_doublon(o):
+    return (normaliser(o.get("intitule")), normaliser(o.get("entreprise")), o.get("dep") or "")
+
+
+def offres_adzuna(jour, geo, cles_ft):
+    """Offres Adzuna récentes, au même format que celles de France Travail."""
+    fichiers = sorted((RACINE / "data" / "adzuna" / "brut").glob("*.jsonl"))
+    versions = {}
+    for f in fichiers:
+        with f.open(encoding="utf-8") as fh:
+            for ligne in fh:
+                if ligne.strip():
+                    v = json.loads(ligne)
+                    versions[v["id"]] = v
+    limite = f"{date.fromisoformat(jour) - timedelta(days=JOURS_ADZUNA):%Y-%m-%d}"
+    offres, doublons = [], 0
+    for oid, v in versions.items():
+        o = v["offre"]
+        cree = (o.get("created") or "")[:10]
+        if cree and cree < limite:
+            continue
+        intitule = BALISES.sub("", o.get("title") or "").strip()
+        description = BALISES.sub("", o.get("description") or "")
+        t = (intitule + " " + description).lower()
+        loc = o.get("location") or {}
+        dep = next((c for c in map(geo.code_departement, (loc.get("area") or [])[1:]) if c), "")
+        lat, lon, precision = o.get("latitude"), o.get("longitude"), "offre"
+        if lat is None or lon is None:
+            p = geo.departement(dep) if dep else None
+            lat, lon, precision = (p[0], p[1], "departement") if p else (None, None, None)
+        rome = v["rome"]
+        if rome == "D1503":                       # chef de rayon : on précise d'après l'intitulé
+            rome = "D1513" if RAYON_FRAIS.search(intitule) else ("D1502" if RAYON_ALIMENTAIRE.search(intitule) else rome)
+        smin = smax = libelle = None
+        if str(o.get("salary_is_predicted")) != "1":   # les salaires estimés par Adzuna ne comptent pas
+            vals = [x for x in (o.get("salary_min"), o.get("salary_max")) if x and SALAIRE_MIN <= x <= SALAIRE_MAX]
+            if vals:
+                smin, smax = round(min(vals)), round(max(vals))
+                libelle = f"Annuel de {smin}.0 Euros à {smax}.0 Euros"
+        offre = {
+            "id": "AZ" + oid,
+            "rome": rome,
+            "source": "Adzuna",
+            "intitule": intitule,
+            "entreprise": (o.get("company") or {}).get("display_name"),
+            "lieu": loc.get("display_name"),
+            "dep": dep,
+            "lat": lat, "lon": lon, "prec": precision,
+            "contrat": CONTRATS_ADZUNA.get(o.get("contract_type")),
+            "experience": None,
+            "alternance": bool(re.search(r"alternan|apprenti", intitule, re.I)),
+            "salaire": libelle,
+            "smin": smin, "smax": smax,
+            "date": cree,
+            "vu_le": v["vu_le"],
+            "url": o.get("redirect_url"),
+            "outils": [nom for nom, rx in REGEX_OUTILS.items() if rx.search(t)],
+            "teletravail": "télétravail" in t,
+            "competences": [],
+            "niveau": niveau(intitule),
+            "nature": "autre",
+            "exp_exige": None,
+            "exp_ans": None,
+            "qualification": None,
+            "formation": None,
+            "secteur": None,
+            "temps": {"full_time": "plein", "part_time": "partiel"}.get(o.get("contract_time")),
+            "postes": 1,
+        }
+        if cle_doublon(offre) in cles_ft:
+            doublons += 1
+            continue
+        offres.append(offre)
+    return offres, doublons
 
 
 def main():
@@ -312,6 +420,7 @@ def main():
         offres.append({
             "id": oid,
             "rome": rome,
+            "source": "France Travail",
             "intitule": o.get("intitule"),
             "entreprise": (o.get("entreprise") or {}).get("nom"),
             "lieu": lieu.get("libelle"),
@@ -338,6 +447,9 @@ def main():
             "temps": temps_travail(o),
             "postes": int(o.get("nombrePostes") or 1),
         })
+    nb_ft = len(offres)
+    adzuna, doublons = offres_adzuna(jour, geo, {cle_doublon(o) for o in offres})
+    offres.extend(adzuna)
     geo.sauver()
 
     # Série : par jour et par métier
@@ -348,8 +460,10 @@ def main():
 
     resume = {
         "date": jour,
-        "source": "France Travail — API Offres d'emploi v2",
-        "requete": "une requête codeROME par métier, France entière",
+        "source": "France Travail — API Offres d'emploi v2" + (" + The Adzuna API" if adzuna else ""),
+        "requete": "une requête codeROME par métier, France entière"
+                   + (f" ; Adzuna : offres de moins de {JOURS_ADZUNA} jours, doublons écartés" if adzuna else ""),
+        "sources": [s for s in ("France Travail", "Adzuna") if any(o["source"] == s for o in offres)],
         "metiers": [{"code": c, "libelle": l, "groupe": g, "coche": k,
                      "actives": sum(1 for o in offres if o["rome"] == c)}
                     for c, (l, g, k) in METIERS.items()],
@@ -370,6 +484,7 @@ def main():
         prec[o["prec"]] += 1
     print(f"Écrit : {sortie.relative_to(RACINE)} — {len(offres)} offres actives du {jour}, "
           f"{sortie.stat().st_size // 1024} Ko")
+    print(f"Sources : {nb_ft} France Travail, {len(adzuna)} Adzuna ({doublons} doublons Adzuna écartés)")
     print(f"Positions : {dict(prec)} ({geo.appels} appels geo.api.gouv.fr)")
     avec = [o for o in offres if o["smin"] is not None]
     part = 100 * len(avec) // len(offres) if offres else 0
