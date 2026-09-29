@@ -40,6 +40,25 @@ du jour dans `data/` et met à jour le site (GitHub Pages).
   de merchandising, M1720 category manager, E1113 responsable e-commerce, D1417 chef
   des ventes, K1816 manager de commerce et territoire.
 
+## Deuxième canal : Adzuna
+
+France Travail reprend déjà une cinquantaine de sites partenaires (Distrijob, Meteojob,
+Directemploi, Indeed…). Pour élargir, `scripts/extraire_adzuna.py` interroge aussi
+[The Adzuna API](https://www.adzuna.fr), un agrégateur d'offres :
+
+- 7 requêtes par expression exacte (« responsable de magasin », « store manager »,
+  « chef de rayon »…), chacune rattachée à un code ROME pour le filtre des métiers ;
+- 250 offres au plus par requête et par jour, les plus récentes d'abord : 35 appels par
+  jour, sous le quota gratuit (250 par jour, 2 500 par mois) ;
+- `resumer.py` retient les offres Adzuna de moins de 45 jours et écarte celles déjà
+  présentes chez France Travail (même intitulé, même employeur, même département) ;
+- les salaires *estimés* par Adzuna sont ignorés : seuls comptent ceux de l'employeur ;
+- chaque offre porte sa source, filtrable sur le site. Adzuna est cité comme source,
+  conformément à ses conditions d'utilisation.
+
+APEC, LinkedIn, Indeed et Welcome to the Jungle ne sont pas collectés : leurs
+conditions d'utilisation interdisent l'extraction automatique.
+
 ## Les questions que nous posons à ce marché
 
 1. Combien d'offres, et où : Clermont / Puy-de-Dôme, Auvergne-Rhône-Alpes, France ?
@@ -69,7 +88,9 @@ API France Travail  →  scripts/extraire.py  →  data/brut/<mois>/<ROME>.jsonl
 1. Créer un dépôt **public** et y envoyer le contenu de ce dossier.
 2. Settings → Secrets and variables → Actions → *New repository secret* :
    `FT_CLIENT_ID` et `FT_CLIENT_SECRET` (identifiants de l'application créée sur
-   [francetravail.io](https://francetravail.io), abonnée à l'API « Offres d'emploi v2 »).
+   [francetravail.io](https://francetravail.io), abonnée à l'API « Offres d'emploi v2 »),
+   et, pour le second canal, `ADZUNA_APP_ID` et `ADZUNA_APP_KEY`
+   (compte gratuit sur [developer.adzuna.com](https://developer.adzuna.com)).
 3. Settings → Pages → Source « Deploy from a branch », branche `main`, dossier `/ (root)`.
 4. Actions → veille → *Run workflow* : le premier commit du bot arrive dans `data/`,
    et le site s'affiche quelques minutes après.

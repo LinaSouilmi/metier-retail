@@ -76,7 +76,8 @@ function rendre(offres, D) {
         <span>·</span><span>${libContratOffre(o)}</span>
         ${salaireCourt(o) ? `<span>·</span><span class="sal">${salaireCourt(o)}</span>` : ""}
         <span class="etiq" style="background:${COUL_NIV[k]}${ENCRE_FONCEE.has(k) ? ";color:#1d1d1f" : ""}">${libNiv(k)}</span>
-        <span>·</span><span>publiée le ${dateFr(o.date)}</span></div>
+        <span>·</span><span>publiée le ${dateFr(o.date)}</span>
+        <span>·</span><span>${sourceOffre(o) === "Adzuna" ? ADZUNA : sourceOffre(o)}</span></div>
     </div>`;
   }).join("") : `<p class="note">Aucune offre dans cette sélection.</p>`;
 }
