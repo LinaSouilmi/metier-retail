@@ -23,13 +23,22 @@ jobs:
 
       - run: pip install -r requirements.txt
 
-      - name: Extraire les offres et refaire le résumé
+      - name: Extraire les offres France Travail
         env:
           FT_CLIENT_ID: ${{ secrets.FT_CLIENT_ID }}
           FT_CLIENT_SECRET: ${{ secrets.FT_CLIENT_SECRET }}
-        run: |
-          python scripts/extraire.py
-          python scripts/resumer.py
+        run: python scripts/extraire.py
+
+      # Deuxième canal : si Adzuna échoue (quota, panne), la veille France Travail continue.
+      - name: Extraire les offres Adzuna
+        continue-on-error: true
+        env:
+          ADZUNA_APP_ID: ${{ secrets.ADZUNA_APP_ID }}
+          ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
+        run: python scripts/extraire_adzuna.py
+
+      - name: Refaire le résumé des pages
+        run: python scripts/resumer.py
 
       - name: Enregistrer la donnée du jour (commit + push)
         run: |
