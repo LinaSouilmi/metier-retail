@@ -205,13 +205,17 @@ function flottantes(id, lignes) {
    ============================================================ */
 const cochees = sel => new Set([...document.querySelectorAll(sel + " input:checked")].map(i => i.value));
 function etatFiltres() {
-  return { metiers: cochees("#metiers"), contrats: cochees("#f-contrats"), niveaux: cochees("#f-niveaux") };
+  return { metiers: cochees("#metiers"), contrats: cochees("#f-contrats"), niveaux: cochees("#f-niveaux"), sources: cochees("#f-sources") };
 }
-/* Les offres retenues par les trois filtres. */
+// Le canal d'une offre ; les résumés d'avant Adzuna n'ont pas ce champ : tout y vient de France Travail.
+const sourceOffre = o => o.source || "France Travail";
+/* Les offres retenues par les quatre filtres. */
 function filtrer(f) {
   f = f || etatFiltres();
-  return D.offres.filter(o => f.metiers.has(o.rome) && f.contrats.has(familleContrat(o)) && f.niveaux.has(niv(o)));
+  return D.offres.filter(o => f.metiers.has(o.rome) && f.contrats.has(familleContrat(o)) && f.niveaux.has(niv(o)) && f.sources.has(sourceOffre(o)));
 }
+// Adzuna exige d'être cité comme source partout où ses offres sont affichées.
+const ADZUNA = `<a href="https://www.adzuna.fr" target="_blank" rel="noopener">Jobs by Adzuna</a>`;
 
 /* ============================================================
    4) NAVIGATION ET PANNEAU DE FILTRES, IDENTIQUES PARTOUT
@@ -246,6 +250,10 @@ const HTML_FILTRES = `
       <div class="cases" id="f-niveaux"></div>
       <p class="note" style="margin:8px 0 0">Déduit de l'intitulé de l'annonce. Ces couleurs servent de repère dans toute la page.</p>
     </div>
+    <div>
+      <h3>Source</h3>
+      <div class="cases" id="f-sources"></div>
+    </div>
   </div>
   <p class="compte" id="compte"></p>`;
 
@@ -260,12 +268,13 @@ function poserNavEtFiltres() {
     ? `<div class="carte">${HTML_FILTRES}</div>`
     // Ailleurs : replié, on vient lire une page, pas refaire ses filtres.
     : `<details class="carte"><summary id="resume-filtres">Filtres</summary>${HTML_FILTRES}</details>`)
-    + `<div class="vide" id="aucune" hidden>Aucune offre ne correspond à ces filtres. Recochez un métier, un type de contrat ou un niveau de poste.</div>`;
+    + `<div class="vide" id="aucune" hidden>Aucune offre ne correspond à ces filtres. Recochez un métier, un type de contrat, un niveau de poste ou une source.</div>`;
 
   const p = document.getElementById("pied");
   if (p) p.innerHTML =
     `<p style="margin:0 0 8px"><a href="mouvement.html#limites">Limites de ces chiffres</a></p>
      Chaîne : API France Travail → <code>scripts/extraire.py</code> → <code>data/brut/</code> (chaque version d'annonce, une seule fois) + <code>data/actives/</code> (les offres du jour) → <code>scripts/resumer.py</code> → <code>data/resume.json</code> → ces pages (GitHub Pages).
+     Deuxième canal : <a href="https://www.adzuna.fr" target="_blank" rel="noopener">The Adzuna API</a> → <code>scripts/extraire_adzuna.py</code> → <code>data/adzuna/</code>. Les offres marquées « Adzuna » : ${ADZUNA}.
      Une Action GitHub relance la collecte chaque matin à 7 h. Identifiants dans les secrets du dépôt, jamais dans le code.
      Projet étudiant — M1 Marketing, IAE Clermont Auvergne, cours d'analyse de données. D'après le dépôt de démonstration de Vincent Favarin.`;
 }
@@ -291,6 +300,7 @@ const Commun = {
     // Compteurs dans les cases de filtre + ligne de synthèse
     CONTRATS.forEach(([k]) => { const e = document.getElementById("nb-c-" + k); if (e) e.textContent = parMetier.filter(o => familleContrat(o) === k).length; });
     NIVEAUX.forEach(([k]) => { const e = document.getElementById("nb-n-" + k); if (e) e.textContent = parMetier.filter(o => niv(o) === k).length; });
+    document.querySelectorAll("#f-sources input").forEach(i => { const e = document.getElementById("nb-s-" + i.dataset.n); if (e) e.textContent = parMetier.filter(o => sourceOffre(o) === i.value).length; });
     document.getElementById("compte").innerHTML = `<b>${n}</b> offre${n > 1 ? "s" : ""} sélectionnée${n > 1 ? "s" : ""} sur ${total} — ${f.metiers.size} métier${f.metiers.size > 1 ? "s" : ""} coché${f.metiers.size > 1 ? "s" : ""}.`;
     document.getElementById("aucune").hidden = n > 0;
     const resume = document.getElementById("resume-filtres");
@@ -300,7 +310,8 @@ const Commun = {
     if (n === 0) { const d = document.querySelector("details.carte"); if (d) d.open = true; }
 
     // Mémorisation des trois filtres ensemble : ils suivent d'une page à l'autre.
-    try { localStorage.setItem("metiers-filtres", JSON.stringify({ metiers: [...f.metiers], contrats: [...f.contrats], niveaux: [...f.niveaux] })); } catch (e) {}
+    try { localStorage.setItem("metiers-filtres", JSON.stringify({ metiers: [...f.metiers], contrats: [...f.contrats], niveaux: [...f.niveaux], sources: [...f.sources],
+      sources_connues: [...document.querySelectorAll("#f-sources input")].map(i => i.value) })); } catch (e) {}
 
     Commun.rendre(offres, D);
   },
@@ -361,8 +372,17 @@ const Commun = {
       const memoN = memoA("niveaux", NIVEAUX.map(x => x[0]));
       document.getElementById("f-niveaux").innerHTML = NIVEAUX.map(([k, l]) =>
         `<label><input type="checkbox" value="${k}" ${memoN.includes(k) ? "checked" : ""}> <i class="pastille" style="background:${COUL_NIV[k]}"></i> ${l} <small id="nb-n-${k}"></small></label>`).join("");
+      // --- Filtre source ---
+      const sources = Array.isArray(d.sources) && d.sources.length ? d.sources : ["France Travail"];
+      // Une source apparue depuis la dernière visite arrive cochée, même si les autres ont été mémorisées.
+      const connues = memoA("sources_connues", memoA("sources", []));
+      const memoS = sources.filter(s => memoA("sources", sources).includes(s) || !connues.includes(s));
+      document.getElementById("f-sources").innerHTML = sources.map((s, i) =>
+        `<label><input type="checkbox" value="${s}" data-n="${i}" ${memoS.includes(s) ? "checked" : ""}> ${s} <small id="nb-s-${i}"></small></label>`).join("")
+        + (sources.includes("Adzuna") ? `<p class="note" style="margin:8px 0 0">${ADZUNA}</p>` : "");
       document.getElementById("f-contrats").addEventListener("change", Commun.rafraichir);
       document.getElementById("f-niveaux").addEventListener("change", Commun.rafraichir);
+      document.getElementById("f-sources").addEventListener("change", Commun.rafraichir);
 
       if (initier) initier(d);
       Commun.rafraichir();
