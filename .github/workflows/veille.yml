@@ -37,6 +37,13 @@ jobs:
           ADZUNA_APP_KEY: ${{ secrets.ADZUNA_APP_KEY }}
         run: python scripts/extraire_adzuna.py
 
+      # Troisième canal, avec l'accord de l'enseignant : plan du site et pages d'offres seulement
+      # (ce que le robots.txt autorise), 300 pages au plus par jour. Un échec n'arrête pas la veille.
+      - name: Extraire les offres Welcome to the Jungle
+        continue-on-error: true
+        timeout-minutes: 20
+        run: python scripts/extraire_wttj.py
+
       - name: Refaire le résumé des pages
         run: python scripts/resumer.py
 
