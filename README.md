@@ -56,8 +56,27 @@ Directemploi, Indeed…). Pour élargir, `scripts/extraire_adzuna.py` interroge 
 - chaque offre porte sa source, filtrable sur le site. Adzuna est cité comme source,
   conformément à ses conditions d'utilisation.
 
-APEC, LinkedIn, Indeed et Welcome to the Jungle ne sont pas collectés : leurs
-conditions d'utilisation interdisent l'extraction automatique.
+## Troisième canal : Welcome to the Jungle
+
+Ajouté avec l'accord de l'enseignant. `scripts/extraire_wttj.py` reste dans ce que le
+`robots.txt` du site autorise aux robots :
+
+- la liste des offres vient du **plan du site** publié pour les robots
+  (`sitemaps/index.xml.gz`) ; aucune page de recherche n'est appelée ;
+- seules les offres dont l'intitulé associe un poste d'encadrement (responsable,
+  directeur, manager, chef, adjoint…) à un lieu de vente (magasin, boutique, rayon,
+  caisse, secteur, drive…) sont lues ;
+- une page toutes les 2 secondes, 300 au plus par jour ; une offre déjà lue n'est relue
+  que si le plan du site la dit modifiée. La base se remplit donc en quelques jours ;
+- on ne garde que des faits (intitulé, employeur, lieu, contrat, salaire affiché,
+  diplôme demandé, télétravail, dates, lien), pas le texte des annonces. L'expérience
+  demandée n'est pas reprise : le champ de la page ne concorde pas toujours avec l'offre.
+
+Welcome to the Jungle publie surtout pour de grandes enseignes et des marques : ce canal
+n'est pas représentatif de tout le marché, c'est à signaler dans le dossier.
+
+APEC, LinkedIn et Indeed ne sont pas collectés : leurs conditions d'utilisation
+interdisent l'extraction automatique.
 
 ## Les questions que nous posons à ce marché
 
