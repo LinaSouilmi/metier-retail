@@ -98,6 +98,9 @@ CONTRATS = {
     "TTI": "Intérim",
     "CDS": "CDD senior",
     "REP": "Reprise d'entreprise",
+    "STG": "Stage",
+    "FRE": "Freelance",
+    "VIE": "VIE",
 }
 
 NATURES = [
@@ -273,6 +276,14 @@ class Geocodeur:
                 return p[0], p[1], "departement"
         return None, None, None
 
+    def code_postal(self, cp):
+        """Centre de la première commune d'un code postal (mis en cache avec les communes)."""
+        cle = "cp" + cp
+        if cle not in self.communes:
+            d = self._get(f"{GEO}/communes?codePostal={cp}&fields=centre&limit=1")
+            self.communes[cle] = d[0]["centre"]["coordinates"][::-1] if d and d[0].get("centre") else None
+        return self.communes[cle]
+
     def code_departement(self, nom):
         """'Loiret' -> '45' ; la liste des départements est lue une fois puis mise en cache."""
         if not hasattr(self, "noms"):
@@ -384,6 +395,69 @@ def offres_adzuna(jour, geo, cles_ft):
     return offres, doublons
 
 
+def offres_wttj(geo, cles_connues):
+    """Offres Welcome to the Jungle actives (scripts/extraire_wttj.py), au format commun."""
+    jours = sorted((RACINE / "data" / "wttj" / "actives").glob("*.csv"))
+    if not jours:
+        return [], 0
+    with jours[-1].open(encoding="utf-8") as f:
+        actives = {r["url"] for r in csv.DictReader(f)}
+    versions = {}
+    for f in sorted((RACINE / "data" / "wttj" / "brut").glob("*.jsonl")):
+        with f.open(encoding="utf-8") as fh:
+            for ligne in fh:
+                if ligne.strip():
+                    v = json.loads(ligne)
+                    if v["url"] in actives:
+                        versions[v["url"]] = v
+    offres, doublons = [], 0
+    for url, v in versions.items():
+        o = v["offre"]
+        cp = o.get("code_postal") or ""
+        dep = departement({"codePostal": cp})
+        p = geo.code_postal(cp) if cp else None
+        lat, lon, precision = (p[0], p[1], "commune") if p else (None, None, None)
+        if lat is None and dep:
+            p = geo.departement(dep)
+            lat, lon, precision = (p[0], p[1], "departement") if p else (None, None, None)
+        smin, smax = o.get("smin"), o.get("smax")
+        offre = {
+            "id": "WJ" + url.rsplit("/jobs/", 1)[1],
+            "rome": v["rome"],
+            "source": "Welcome to the Jungle",
+            "intitule": o.get("titre"),
+            "entreprise": o.get("entreprise"),
+            "lieu": " ".join(x for x in (cp[:2], "-", o.get("ville")) if x) if cp else o.get("ville"),
+            "dep": dep,
+            "lat": lat, "lon": lon, "prec": precision,
+            "contrat": o.get("contrat"),
+            "experience": None,
+            "alternance": bool(o.get("alternance")),
+            "salaire": f"Annuel de {smin}.0 Euros à {smax}.0 Euros" if smin else None,
+            "smin": smin, "smax": smax,
+            "date": o.get("publiee"),
+            "vu_le": v["vu_le"],
+            "url": url,
+            "outils": o.get("outils") or [],
+            "teletravail": bool(o.get("teletravail")),
+            "competences": [],
+            "niveau": niveau(o.get("titre")),
+            "nature": "autre",
+            "exp_exige": None,
+            "exp_ans": None,
+            "qualification": None,
+            "formation": o.get("formation"),
+            "secteur": o.get("secteur"),
+            "temps": None,
+            "postes": 1,
+        }
+        if cle_doublon(offre) in cles_connues:
+            doublons += 1
+            continue
+        offres.append(offre)
+    return offres, doublons
+
+
 def main():
     jours = sorted((RACINE / "data" / "actives").glob("*.csv"))
     if not jours:
@@ -450,6 +524,8 @@ def main():
     nb_ft = len(offres)
     adzuna, doublons = offres_adzuna(jour, geo, {cle_doublon(o) for o in offres})
     offres.extend(adzuna)
+    wttj, doublons_wttj = offres_wttj(geo, {cle_doublon(o) for o in offres})
+    offres.extend(wttj)
     geo.sauver()
 
     # Série : par jour et par métier
@@ -460,10 +536,13 @@ def main():
 
     resume = {
         "date": jour,
-        "source": "France Travail — API Offres d'emploi v2" + (" + The Adzuna API" if adzuna else ""),
+        "source": "France Travail — API Offres d'emploi v2" + (" + The Adzuna API" if adzuna else "")
+                  + (" + Welcome to the Jungle" if wttj else ""),
         "requete": "une requête codeROME par métier, France entière"
-                   + (f" ; Adzuna : offres de moins de {JOURS_ADZUNA} jours, doublons écartés" if adzuna else ""),
-        "sources": [s for s in ("France Travail", "Adzuna") if any(o["source"] == s for o in offres)],
+                   + (f" ; Adzuna : offres de moins de {JOURS_ADZUNA} jours" if adzuna else "")
+                   + (" ; Welcome to the Jungle : offres retail du plan du site" if wttj else "")
+                   + (", doublons écartés" if adzuna or wttj else ""),
+        "sources": [s for s in ("France Travail", "Adzuna", "Welcome to the Jungle") if any(o["source"] == s for o in offres)],
         "metiers": [{"code": c, "libelle": l, "groupe": g, "coche": k,
                      "actives": sum(1 for o in offres if o["rome"] == c)}
                     for c, (l, g, k) in METIERS.items()],
@@ -484,7 +563,8 @@ def main():
         prec[o["prec"]] += 1
     print(f"Écrit : {sortie.relative_to(RACINE)} — {len(offres)} offres actives du {jour}, "
           f"{sortie.stat().st_size // 1024} Ko")
-    print(f"Sources : {nb_ft} France Travail, {len(adzuna)} Adzuna ({doublons} doublons Adzuna écartés)")
+    print(f"Sources : {nb_ft} France Travail, {len(adzuna)} Adzuna ({doublons} doublons écartés), "
+          f"{len(wttj)} Welcome to the Jungle ({doublons_wttj} doublons écartés)")
     print(f"Positions : {dict(prec)} ({geo.appels} appels geo.api.gouv.fr)")
     avec = [o for o in offres if o["smin"] is not None]
     part = 100 * len(avec) // len(offres) if offres else 0
