@@ -75,6 +75,23 @@ Ajouté avec l'accord de l'enseignant. `scripts/extraire_wttj.py` reste dans ce 
 Welcome to the Jungle publie surtout pour de grandes enseignes et des marques : ce canal
 n'est pas représentatif de tout le marché, c'est à signaler dans le dossier.
 
+## Quatrième canal : La bonne alternance
+
+`scripts/extraire_lba.py` interroge l'[API publique de La bonne alternance](https://api.apprentissage.beta.gouv.fr)
+(service de l'État, données sous licence ouverte Etalab 2.0) :
+
+- une requête par code ROME, pour les 18 métiers suivis ;
+- l'API renvoie au plus 150 offres par source et par requête : si un métier atteint ce
+  plafond, le script redécoupe la recherche par groupes de départements, puis
+  département par département ;
+- les offres France Travail que La bonne alternance relaie sont écartées, puisqu'on les
+  a déjà ; les autres doublons sont écartés par `resumer.py` ;
+- toutes les offres sont classées « Alternance », avec le diplôme visé, les compétences
+  demandées, le secteur de l'entreprise et le télétravail quand ils sont renseignés.
+
+Données dans `data/lba/`. Il faut une clé d'API « production » (lecture seule), à mettre
+dans le secret `LBA_API_KEY`.
+
 APEC, LinkedIn et Indeed ne sont pas collectés : leurs conditions d'utilisation
 interdisent l'extraction automatique.
 
@@ -108,8 +125,9 @@ API France Travail  →  scripts/extraire.py  →  data/brut/<mois>/<ROME>.jsonl
 2. Settings → Secrets and variables → Actions → *New repository secret* :
    `FT_CLIENT_ID` et `FT_CLIENT_SECRET` (identifiants de l'application créée sur
    [francetravail.io](https://francetravail.io), abonnée à l'API « Offres d'emploi v2 »),
-   et, pour le second canal, `ADZUNA_APP_ID` et `ADZUNA_APP_KEY`
-   (compte gratuit sur [developer.adzuna.com](https://developer.adzuna.com)).
+   `ADZUNA_APP_ID` et `ADZUNA_APP_KEY` (compte gratuit sur
+   [developer.adzuna.com](https://developer.adzuna.com)), `LBA_API_KEY` (clé production
+   de l'[espace développeurs La bonne alternance](https://api.apprentissage.beta.gouv.fr)).
 3. Settings → Pages → Source « Deploy from a branch », branche `main`, dossier `/ (root)`.
 4. Actions → veille → *Run workflow* : le premier commit du bot arrive dans `data/`,
    et le site s'affiche quelques minutes après.
