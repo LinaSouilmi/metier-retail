@@ -395,6 +395,78 @@ def offres_adzuna(jour, geo, cles_ft):
     return offres, doublons
 
 
+DIPLOMES_EUROPEENS = {"3": "< Bac", "4": "Bac", "5": "Bac+2", "6": "Bac+3/4", "7": "Bac+5"}
+
+
+def offres_lba(cles_connues):
+    """Offres en alternance de La bonne alternance (scripts/extraire_lba.py), au format commun."""
+    jours = sorted((RACINE / "data" / "lba" / "actives").glob("*.csv"))
+    if not jours:
+        return [], 0
+    with jours[-1].open(encoding="utf-8") as f:
+        actives = {r["id"]: r["rome"] for r in csv.DictReader(f)}
+    versions = {}
+    for f in sorted((RACINE / "data" / "lba" / "brut").glob("*.jsonl")):
+        with f.open(encoding="utf-8") as fh:
+            for ligne in fh:
+                if ligne.strip():
+                    v = json.loads(ligne)
+                    if v["id"] in actives:
+                        versions[v["id"]] = v
+    offres, doublons = [], 0
+    for oid, v in versions.items():
+        o = v["offre"]
+        lieu = o.get("workplace") or {}
+        loc = lieu.get("location") or {}
+        coords = ((loc.get("geopoint") or {}).get("coordinates") or [None, None])
+        adresse = loc.get("address") or ""
+        cp = re.search(r"\b(\d{5})\b", adresse)
+        contrat = o.get("contract") or {}
+        types = contrat.get("type") or []
+        offre = o.get("offer") or {}
+        titre = offre.get("title") or ""
+        t = (titre + " " + BALISES.sub(" ", offre.get("description") or "")).lower()
+        codes = [c for c in offre.get("rome_codes") or [] if c in METIERS]
+        dep = departement({"codePostal": cp.group(1)}) if cp else ""
+        ville = re.sub(r"^.*\b\d{5}\s*", "", adresse).strip() if cp else adresse
+        entree = {
+            "id": "LB" + oid,
+            "rome": codes[0] if codes else actives[oid],
+            "source": "La bonne alternance",
+            "partenaire": (o.get("identifier") or {}).get("partner_label"),
+            "intitule": titre,
+            "entreprise": lieu.get("brand") or lieu.get("name") or lieu.get("legal_name"),
+            "lieu": f"{dep} - {ville.title()}" if dep else (adresse or None),
+            "dep": dep,
+            "lat": coords[1], "lon": coords[0], "prec": "offre" if coords[0] is not None else None,
+            "contrat": None,
+            "experience": None,
+            "alternance": True,
+            "salaire": None,
+            "smin": None, "smax": None,
+            "date": ((offre.get("publication") or {}).get("creation") or "")[:10],
+            "vu_le": v["vu_le"],
+            "url": (o.get("apply") or {}).get("url"),
+            "outils": [nom for nom, rx in REGEX_OUTILS.items() if rx.search(t)],
+            "teletravail": contrat.get("remote") in ("hybrid", "remote"),
+            "competences": offre.get("desired_skills") or [],
+            "niveau": niveau(titre),
+            "nature": "apprentissage" if "Apprentissage" in types else ("professionnalisation" if types else "apprentissage"),
+            "exp_exige": None,
+            "exp_ans": None,
+            "qualification": None,
+            "formation": DIPLOMES_EUROPEENS.get(str((offre.get("target_diploma") or {}).get("european") or "")),
+            "secteur": (((lieu.get("domain") or {}).get("naf") or {}).get("label")),
+            "temps": None,
+            "postes": int(offre.get("opening_count") or 1),
+        }
+        if cle_doublon(entree) in cles_connues:
+            doublons += 1
+            continue
+        offres.append(entree)
+    return offres, doublons
+
+
 def offres_wttj(geo, cles_connues):
     """Offres Welcome to the Jungle actives (scripts/extraire_wttj.py), au format commun."""
     jours = sorted((RACINE / "data" / "wttj" / "actives").glob("*.csv"))
@@ -526,6 +598,8 @@ def main():
     offres.extend(adzuna)
     wttj, doublons_wttj = offres_wttj(geo, {cle_doublon(o) for o in offres})
     offres.extend(wttj)
+    lba, doublons_lba = offres_lba({cle_doublon(o) for o in offres})
+    offres.extend(lba)
     geo.sauver()
 
     # Série : par jour et par métier
@@ -537,12 +611,15 @@ def main():
     resume = {
         "date": jour,
         "source": "France Travail — API Offres d'emploi v2" + (" + The Adzuna API" if adzuna else "")
-                  + (" + Welcome to the Jungle" if wttj else ""),
+                  + (" + Welcome to the Jungle" if wttj else "")
+                  + (" + La bonne alternance" if lba else ""),
         "requete": "une requête codeROME par métier, France entière"
                    + (f" ; Adzuna : offres de moins de {JOURS_ADZUNA} jours" if adzuna else "")
                    + (" ; Welcome to the Jungle : offres retail du plan du site" if wttj else "")
-                   + (", doublons écartés" if adzuna or wttj else ""),
-        "sources": [s for s in ("France Travail", "Adzuna", "Welcome to the Jungle") if any(o["source"] == s for o in offres)],
+                   + (" ; La bonne alternance : offres en alternance hors France Travail" if lba else "")
+                   + (", doublons écartés" if adzuna or wttj or lba else ""),
+        "sources": [s for s in ("France Travail", "Adzuna", "Welcome to the Jungle", "La bonne alternance")
+                    if any(o["source"] == s for o in offres)],
         "metiers": [{"code": c, "libelle": l, "groupe": g, "coche": k,
                      "actives": sum(1 for o in offres if o["rome"] == c)}
                     for c, (l, g, k) in METIERS.items()],
@@ -564,7 +641,8 @@ def main():
     print(f"Écrit : {sortie.relative_to(RACINE)} — {len(offres)} offres actives du {jour}, "
           f"{sortie.stat().st_size // 1024} Ko")
     print(f"Sources : {nb_ft} France Travail, {len(adzuna)} Adzuna ({doublons} doublons écartés), "
-          f"{len(wttj)} Welcome to the Jungle ({doublons_wttj} doublons écartés)")
+          f"{len(wttj)} Welcome to the Jungle ({doublons_wttj} doublons écartés), "
+          f"{len(lba)} La bonne alternance ({doublons_lba} doublons écartés)")
     print(f"Positions : {dict(prec)} ({geo.appels} appels geo.api.gouv.fr)")
     avec = [o for o in offres if o["smin"] is not None]
     part = 100 * len(avec) // len(offres) if offres else 0
