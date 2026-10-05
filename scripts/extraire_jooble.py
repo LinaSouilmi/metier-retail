@@ -27,7 +27,10 @@ from dotenv import load_dotenv
 RACINE = Path(__file__).resolve().parent.parent
 load_dotenv(RACINE / ".env")
 
-URL = os.getenv("JOOBLE_URL", "https://jooble.org/api/")
+# Le site français de Jooble : jooble.org sert les offres américaines (« Paris » y devient
+# Paris, Texas — essai du 05/10/2026). resumer.py ne garde que les offres lues sur ce site-ci.
+URL = os.getenv("JOOBLE_URL", "https://fr.jooble.org/api/")
+HOTE = URL.split("/")[2]
 # Jooble ne comprend pas « France » comme lieu : il ne renvoie alors que des offres sans lieu
 # précis, sans rapport avec les mots-clés (essai du 05/10/2026 : 0 offre retail sur 141).
 # On cherche donc ville par ville, dans un rayon de 40 km ; resumer.py ne garde ensuite que les
@@ -103,7 +106,8 @@ def main():
                         ids_connus.add(oid)
                         vues.add((oid, e))
                         brut.write(json.dumps({"id": oid, "empreinte": e, "vu_le": aujourdhui, "requete": requete,
-                                               "ville": ville, "rome": rome, "offre": o}, ensure_ascii=False) + "\n")
+                                               "ville": ville, "hote": HOTE, "rome": rome, "offre": o},
+                                              ensure_ascii=False) + "\n")
                 if not lot:
                     break
             lignes_serie.append([aujourdhui, f"{requete} / {ville}", total if total is not None else "",

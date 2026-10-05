@@ -566,7 +566,9 @@ def offres_jooble(geo, cles_connues):
             for ligne in fh:
                 if ligne.strip():
                     v = json.loads(ligne)
-                    if v["id"] in actives:
+                    # Seules comptent les offres du site français de Jooble : les premières
+                    # collectes interrogeaient jooble.org, qui sert le marché américain.
+                    if v["id"] in actives and v.get("hote") == "fr.jooble.org":
                         versions[v["id"]] = v
     offres, doublons = [], 0
     for oid, v in versions.items():
