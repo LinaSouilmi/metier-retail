@@ -467,6 +467,95 @@ def offres_lba(cles_connues):
     return offres, doublons
 
 
+SALAIRE_LIBRE = re.compile(r"(\d[\d\s.,]*)\s*(k)?\s*(?:€|eur)", re.I)
+
+
+def salaire_texte(lib):
+    """'2 000 € - 2 500 € par mois' -> (24000, 30000) ; None si rien de lisible ou d'invraisemblable."""
+    if not lib:
+        return None, None
+    l = lib.lower()
+    mult = 12 if "mois" in l else (1607 if "heure" in l or "/h" in l else 1)
+    vals = []
+    for nombre, k in SALAIRE_LIBRE.findall(l):
+        n = nombre.replace(" ", "").replace(" ", "").replace("\xa0", "")
+        n = n.replace(",", ".") if n.count(",") == 1 and len(n.split(",")[1]) <= 2 else n.replace(",", "")
+        try:
+            v = float(n) * (1000 if k else 1) * mult
+        except ValueError:
+            continue
+        if SALAIRE_MIN <= v <= SALAIRE_MAX:
+            vals.append(v)
+    return (round(min(vals)), round(max(vals))) if vals else (None, None)
+
+
+def offres_jooble(geo, cles_connues):
+    """Offres Jooble vues à la dernière collecte (scripts/extraire_jooble.py), au format commun."""
+    jours = sorted((RACINE / "data" / "jooble" / "actives").glob("*.csv"))
+    if not jours:
+        return [], 0
+    with jours[-1].open(encoding="utf-8") as f:
+        actives = {r["id"]: r["rome"] for r in csv.DictReader(f)}
+    versions = {}
+    for f in sorted((RACINE / "data" / "jooble" / "brut").glob("*.jsonl")):
+        with f.open(encoding="utf-8") as fh:
+            for ligne in fh:
+                if ligne.strip():
+                    v = json.loads(ligne)
+                    if v["id"] in actives:
+                        versions[v["id"]] = v
+    offres, doublons = [], 0
+    for oid, v in versions.items():
+        o = v["offre"]
+        titre = BALISES.sub("", o.get("title") or "").strip()
+        t = (titre + " " + BALISES.sub(" ", o.get("snippet") or "")).lower()
+        lieu = (o.get("location") or "").strip()
+        m = re.search(r"\((\d{2,3}|2A|2B)\)", lieu)
+        dep = m.group(1) if m else next((c for c in map(geo.code_departement, re.split(r"[,/]", lieu)) if c), "")
+        p = geo.departement(dep) if dep else None
+        rome = v["rome"]
+        if rome == "D1503":
+            rome = "D1513" if RAYON_FRAIS.search(titre) else ("D1502" if RAYON_ALIMENTAIRE.search(titre) else rome)
+        type_ = (o.get("type") or "").lower()
+        smin, smax = salaire_texte(o.get("salary"))
+        entree = {
+            "id": "JO" + oid,
+            "rome": rome,
+            "source": "Jooble",
+            "partenaire": o.get("source"),
+            "intitule": titre,
+            "entreprise": (o.get("company") or "").strip() or None,
+            "lieu": lieu or None,
+            "dep": dep,
+            "lat": p[0] if p else None, "lon": p[1] if p else None, "prec": "departement" if p else None,
+            "contrat": "CDI" if "cdi" in type_ else ("CDD" if "cdd" in type_ else ("MIS" if "intérim" in type_ or "interim" in type_ else None)),
+            "experience": None,
+            "alternance": bool(re.search(r"alternan|apprenti", titre + " " + type_, re.I)),
+            "salaire": f"Annuel de {smin}.0 Euros à {smax}.0 Euros" if smin else None,
+            "smin": smin, "smax": smax,
+            "date": (o.get("updated") or "")[:10],
+            "vu_le": v["vu_le"],
+            "url": o.get("link"),
+            "outils": [nom for nom, rx in REGEX_OUTILS.items() if rx.search(t)],
+            "teletravail": "télétravail" in t,
+            "competences": [],
+            "niveau": niveau(titre),
+            "nature": "autre",
+            "exp_exige": None,
+            "exp_ans": None,
+            "qualification": None,
+            "formation": None,
+            "secteur": None,
+            "temps": "partiel" if "partiel" in type_ else ("plein" if "plein" in type_ else None),
+            "postes": 1,
+        }
+        if cle_doublon(entree) in cles_connues:
+            doublons += 1
+            continue
+        offres.append(entree)
+    return offres, doublons
+
+
 def offres_wttj(geo, cles_connues):
     """Offres Welcome to the Jungle actives (scripts/extraire_wttj.py), au format commun."""
     jours = sorted((RACINE / "data" / "wttj" / "actives").glob("*.csv"))
@@ -600,6 +689,8 @@ def main():
     offres.extend(wttj)
     lba, doublons_lba = offres_lba({cle_doublon(o) for o in offres})
     offres.extend(lba)
+    jooble, doublons_jooble = offres_jooble(geo, {cle_doublon(o) for o in offres})
+    offres.extend(jooble)
     geo.sauver()
 
     # Série : par jour et par métier
@@ -612,13 +703,15 @@ def main():
         "date": jour,
         "source": "France Travail — API Offres d'emploi v2" + (" + The Adzuna API" if adzuna else "")
                   + (" + Welcome to the Jungle" if wttj else "")
-                  + (" + La bonne alternance" if lba else ""),
+                  + (" + La bonne alternance" if lba else "")
+                  + (" + Jooble" if jooble else ""),
         "requete": "une requête codeROME par métier, France entière"
                    + (f" ; Adzuna : offres de moins de {JOURS_ADZUNA} jours" if adzuna else "")
                    + (" ; Welcome to the Jungle : offres retail du plan du site" if wttj else "")
                    + (" ; La bonne alternance : offres en alternance hors France Travail" if lba else "")
-                   + (", doublons écartés" if adzuna or wttj or lba else ""),
-        "sources": [s for s in ("France Travail", "Adzuna", "Welcome to the Jungle", "La bonne alternance")
+                   + (" ; Jooble : offres vues à la dernière collecte" if jooble else "")
+                   + (", doublons écartés" if adzuna or wttj or lba or jooble else ""),
+        "sources": [s for s in ("France Travail", "Adzuna", "Welcome to the Jungle", "La bonne alternance", "Jooble")
                     if any(o["source"] == s for o in offres)],
         "metiers": [{"code": c, "libelle": l, "groupe": g, "coche": k,
                      "actives": sum(1 for o in offres if o["rome"] == c)}
@@ -642,7 +735,8 @@ def main():
           f"{sortie.stat().st_size // 1024} Ko")
     print(f"Sources : {nb_ft} France Travail, {len(adzuna)} Adzuna ({doublons} doublons écartés), "
           f"{len(wttj)} Welcome to the Jungle ({doublons_wttj} doublons écartés), "
-          f"{len(lba)} La bonne alternance ({doublons_lba} doublons écartés)")
+          f"{len(lba)} La bonne alternance ({doublons_lba} doublons écartés), "
+          f"{len(jooble)} Jooble ({doublons_jooble} doublons écartés)")
     print(f"Positions : {dict(prec)} ({geo.appels} appels geo.api.gouv.fr)")
     avec = [o for o in offres if o["smin"] is not None]
     part = 100 * len(avec) // len(offres) if offres else 0
