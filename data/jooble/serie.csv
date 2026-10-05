@@ -1,9 +1,57 @@
 date,requete,total,recuperees,nouvelles
 2026-10-05,chef de rayon,24,2,2
 2026-10-05,chef de secteur magasin,24,0,0
+2026-10-05,chef de secteur magasin / Bordeaux,5,2,2
+2026-10-05,chef de secteur magasin / Clermont-Ferrand,4285,46,46
+2026-10-05,chef de secteur magasin / Lille,3,1,1
+2026-10-05,chef de secteur magasin / Lyon,79,32,32
+2026-10-05,chef de secteur magasin / Marseille,0,0,0
+2026-10-05,chef de secteur magasin / Montpellier,0,0,0
+2026-10-05,chef de secteur magasin / Nantes,0,0,0
+2026-10-05,chef de secteur magasin / Nice,57,19,19
+2026-10-05,chef de secteur magasin / Paris,150,45,45
+2026-10-05,chef de secteur magasin / Rennes,0,0,0
+2026-10-05,chef de secteur magasin / Strasbourg,0,0,0
+2026-10-05,chef de secteur magasin / Toulouse,70,24,24
 2026-10-05,directeur de magasin,38,8,8
+2026-10-05,directeur de magasin / Bordeaux,15,13,13
+2026-10-05,directeur de magasin / Clermont-Ferrand,5615,48,48
+2026-10-05,directeur de magasin / Lille,11,10,10
+2026-10-05,directeur de magasin / Lyon,131,50,50
+2026-10-05,directeur de magasin / Marseille,0,0,0
+2026-10-05,directeur de magasin / Montpellier,0,0,0
+2026-10-05,directeur de magasin / Nantes,0,0,0
+2026-10-05,directeur de magasin / Nice,100,49,49
+2026-10-05,directeur de magasin / Paris,182,45,45
+2026-10-05,directeur de magasin / Rennes,0,0,0
+2026-10-05,directeur de magasin / Strasbourg,0,0,0
+2026-10-05,directeur de magasin / Toulouse,92,49,49
 2026-10-05,manager de rayon,46,9,9
+2026-10-05,manager de rayon / Bordeaux,17,3,3
+2026-10-05,manager de rayon / Clermont-Ferrand,5542,31,31
+2026-10-05,manager de rayon / Lille,13,2,2
+2026-10-05,manager de rayon / Lyon,143,26,26
+2026-10-05,manager de rayon / Marseille,0,0,0
+2026-10-05,manager de rayon / Montpellier,0,0,0
+2026-10-05,manager de rayon / Nantes,0,0,0
+2026-10-05,manager de rayon / Nice,108,25,25
+2026-10-05,manager de rayon / Paris,204,19,19
+2026-10-05,manager de rayon / Rennes,0,0,0
+2026-10-05,manager de rayon / Strasbourg,0,0,0
+2026-10-05,manager de rayon / Toulouse,91,25,25
 2026-10-05,responsable de boutique,113,1,1
 2026-10-05,responsable de caisse,113,0,0
 2026-10-05,responsable de magasin,113,113,113
+2026-10-05,responsable de magasin / Bordeaux,177,50,50
+2026-10-05,responsable de magasin / Clermont-Ferrand,16142,50,50
+2026-10-05,responsable de magasin / Lille,160,50,50
+2026-10-05,responsable de magasin / Lyon,398,50,50
+2026-10-05,responsable de magasin / Marseille,0,0,0
+2026-10-05,responsable de magasin / Montpellier,0,0,0
+2026-10-05,responsable de magasin / Nantes,0,0,0
+2026-10-05,responsable de magasin / Nice,1177,50,50
+2026-10-05,responsable de magasin / Paris,991,50,50
+2026-10-05,responsable de magasin / Rennes,0,0,0
+2026-10-05,responsable de magasin / Strasbourg,0,0,0
+2026-10-05,responsable de magasin / Toulouse,607,50,50
 2026-10-05,store manager,22,8,8
