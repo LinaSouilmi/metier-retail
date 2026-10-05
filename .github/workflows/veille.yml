@@ -46,6 +46,15 @@ jobs:
           PYTHONUNBUFFERED: "1"
         run: python scripts/extraire_lba.py
 
+      # Offres de l'agrégateur Jooble (clé dans JOOBLE_API_KEY).
+      - name: Extraire les offres Jooble
+        continue-on-error: true
+        timeout-minutes: 10
+        env:
+          JOOBLE_API_KEY: ${{ secrets.JOOBLE_API_KEY }}
+          PYTHONUNBUFFERED: "1"
+        run: python scripts/extraire_jooble.py
+
       # Troisième canal, avec l'accord de l'enseignant : plan du site et pages d'offres seulement
       # (ce que le robots.txt autorise), 300 pages au plus par jour. Un échec n'arrête pas la veille.
       - name: Extraire les offres Welcome to the Jungle
