@@ -1,7 +1,7 @@
 date,requete,total,recuperees,nouvelles
 2026-10-05,chef de rayon,24,2,2
 2026-10-05,chef de secteur magasin,24,0,0
-2026-10-05,chef de secteur magasin / ,51976,136,136
+2026-10-05,chef de secteur magasin / ,51976,135,15
 2026-10-05,chef de secteur magasin / Bordeaux,,0,0
 2026-10-05,chef de secteur magasin / Clermont-Ferrand,,0,0
 2026-10-05,chef de secteur magasin / Lille,,0,0
@@ -15,7 +15,7 @@ date,requete,total,recuperees,nouvelles
 2026-10-05,chef de secteur magasin / Strasbourg,,0,0
 2026-10-05,chef de secteur magasin / Toulouse,,0,0
 2026-10-05,directeur de magasin,38,8,8
-2026-10-05,directeur de magasin / ,21786,140,140
+2026-10-05,directeur de magasin / ,21786,141,31
 2026-10-05,directeur de magasin / Bordeaux,,0,0
 2026-10-05,directeur de magasin / Clermont-Ferrand,,0,0
 2026-10-05,directeur de magasin / Lille,,0,0
@@ -29,7 +29,7 @@ date,requete,total,recuperees,nouvelles
 2026-10-05,directeur de magasin / Strasbourg,,0,0
 2026-10-05,directeur de magasin / Toulouse,,0,0
 2026-10-05,manager de rayon,46,9,9
-2026-10-05,manager de rayon / ,62461,149,149
+2026-10-05,manager de rayon / ,62461,149,9
 2026-10-05,manager de rayon / Bordeaux,,0,0
 2026-10-05,manager de rayon / Clermont-Ferrand,,0,0
 2026-10-05,manager de rayon / Lille,,0,0
@@ -45,7 +45,7 @@ date,requete,total,recuperees,nouvelles
 2026-10-05,responsable de boutique,113,1,1
 2026-10-05,responsable de caisse,113,0,0
 2026-10-05,responsable de magasin,113,113,113
-2026-10-05,responsable de magasin / ,47794,150,150
+2026-10-05,responsable de magasin / ,47794,150,17
 2026-10-05,responsable de magasin / Bordeaux,,0,0
 2026-10-05,responsable de magasin / Clermont-Ferrand,,0,0
 2026-10-05,responsable de magasin / Lille,,0,0
