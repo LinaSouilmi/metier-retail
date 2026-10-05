@@ -31,12 +31,11 @@ load_dotenv(RACINE / ".env")
 # Paris, Texas — essai du 05/10/2026). resumer.py ne garde que les offres lues sur ce site-ci.
 URL = os.getenv("JOOBLE_URL", "https://fr.jooble.org/api/")
 HOTE = URL.split("/")[2]
-# Jooble ne comprend pas « France » comme lieu : il ne renvoie alors que des offres sans lieu
-# précis, sans rapport avec les mots-clés (essai du 05/10/2026 : 0 offre retail sur 141).
-# On cherche donc ville par ville, dans un rayon de 40 km ; resumer.py ne garde ensuite que les
-# intitulés de retail (TITRE_RETAIL).
-VILLES = ["Paris", "Lyon", "Marseille", "Toulouse", "Lille", "Bordeaux", "Nantes", "Strasbourg",
-          "Montpellier", "Rennes", "Nice", "Clermont-Ferrand"]
+# Lieu vide = toute la France sur le site français (sur jooble.org, le lieu « France » renvoyait
+# des offres sans rapport : 0 retail sur 141). La clé est limitée à 500 requêtes : 4 requêtes
+# x 3 pages = 12 appels par jour au plus. Pour chercher ville par ville, ajouter des villes ici.
+# resumer.py ne garde ensuite que les intitulés de retail (TITRE_RETAIL).
+VILLES = [""]
 RAYON_KM = "40"
 # Requête (mots-clés) -> code ROME de rattachement, comme pour Adzuna.
 REQUETES = {
@@ -45,7 +44,7 @@ REQUETES = {
     "manager de rayon": "D1503",
     "chef de secteur magasin": "D1510",
 }
-PAGES_MAX = 1           # page de résultats par requête, par ville et par jour
+PAGES_MAX = 3           # pages de résultats par requête et par jour
 PAR_PAGE = 50
 PAUSE = 1.5             # secondes entre deux appels
 
@@ -76,7 +75,10 @@ def main():
 
     actives, lignes_serie = {}, []
     with (dossier / "brut" / f"{aujourdhui[:7]}.jsonl").open("a", encoding="utf-8") as brut:
+        bloque = False
         for (requete, rome), ville in ((rq, v) for rq in REQUETES.items() for v in VILLES):
+            if bloque:
+                break
             total, recuperees, nouvelles = None, 0, 0
             for page in range(1, PAGES_MAX + 1):
                 try:
@@ -88,6 +90,9 @@ def main():
                     d = r.json()
                 except (requests.RequestException, ValueError) as e:
                     print(f"Jooble : « {requete} » {ville} page {page} a échoué — {e}", flush=True)
+                    if getattr(getattr(e, "response", None), "status_code", None) == 403:
+                        print("Jooble : clé refusée (403) — collecte arrêtée pour ne pas user le quota.", flush=True)
+                        bloque = True
                     break
                 total = d.get("totalCount", total)
                 lot = d.get("jobs") or []
