@@ -286,6 +286,16 @@ class Geocodeur:
             self.communes[cle] = d[0]["centre"]["coordinates"][::-1] if d and d[0].get("centre") else None
         return self.communes[cle]
 
+    def ville(self, nom):
+        """'Aix-en-Provence' -> (département, lat, lon) de la commune la plus peuplée de ce nom."""
+        cle = "nom:" + normaliser(nom)
+        if cle not in self.communes:
+            d = self._get(f"{GEO}/communes?nom={requests.utils.quote(nom)}&fields=codeDepartement,centre"
+                          f"&boost=population&limit=1")
+            self.communes[cle] = ([d[0]["codeDepartement"]] + d[0]["centre"]["coordinates"][::-1]
+                                  if d and d[0].get("centre") else None)
+        return self.communes[cle]
+
     def code_departement(self, nom):
         """'Loiret' -> '45' ; la liste des départements est lue une fois puis mise en cache."""
         if not hasattr(self, "noms"):
@@ -577,10 +587,22 @@ def offres_jooble(geo, cles_connues):
         if not TITRE_RETAIL.search(normaliser(titre)):
             continue                              # hors retail : la recherche Jooble est trop lâche
         t = (titre + " " + BALISES.sub(" ", o.get("snippet") or "")).lower()
+        # Lieux Jooble : « Montauban, Tarn-et-Garonne », « Fayet, 80300 », « Grenoble », « Lyon (69) ».
+        # Sans département, le contrôle des doublons ne peut pas comparer : on le retrouve par le
+        # code postal, le nom du département, ou à défaut le nom de la ville (geo.api.gouv.fr).
         lieu = (o.get("location") or "").strip()
+        morceaux = [x.strip() for x in re.split(r"[,/]", lieu) if x.strip()]
         m = re.search(r"\((\d{2,3}|2A|2B)\)", lieu)
-        dep = m.group(1) if m else next((c for c in map(geo.code_departement, re.split(r"[,/]", lieu)) if c), "")
-        p = geo.departement(dep) if dep else None
+        cp = re.search(r"\b(\d{5})\b", lieu)
+        dep = (m.group(1) if m else departement({"codePostal": cp.group(1)}) if cp
+               else next((c for c in map(geo.code_departement, morceaux[1:]) if c), ""))
+        lat = lon = precision = None
+        commune = geo.ville(re.sub(r"\s*\(.*\)", "", morceaux[0])) if morceaux and morceaux[0] != "France" else None
+        if commune and (not dep or commune[0] == dep):
+            dep, lat, lon, precision = commune[0], commune[1], commune[2], "commune"
+        elif dep:
+            p = geo.departement(dep)
+            lat, lon, precision = (p[0], p[1], "departement") if p else (None, None, None)
         rome = v["rome"]
         if rome == "D1503":
             rome = "D1513" if RAYON_FRAIS.search(titre) else ("D1502" if RAYON_ALIMENTAIRE.search(titre) else rome)
@@ -595,7 +617,7 @@ def offres_jooble(geo, cles_connues):
             "entreprise": (o.get("company") or "").strip() or None,
             "lieu": lieu or None,
             "dep": dep,
-            "lat": p[0] if p else None, "lon": p[1] if p else None, "prec": "departement" if p else None,
+            "lat": lat, "lon": lon, "prec": precision,
             "contrat": "CDI" if "cdi" in type_ else ("CDD" if "cdd" in type_ else ("MIS" if "intérim" in type_ or "interim" in type_ else None)),
             "experience": None,
             "alternance": bool(re.search(r"alternan|apprenti", titre + " " + type_, re.I)),
