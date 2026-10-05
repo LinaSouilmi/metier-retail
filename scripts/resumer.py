@@ -18,7 +18,9 @@ C'est ici que la donnée brute est retravaillée :
 La page recalcule ensuite tous les comptages côté navigateur, selon les métiers cochés.
 """
 import csv
+import html
 import json
+import math
 import re
 import sys
 import time
@@ -319,8 +321,63 @@ RAYON_ALIMENTAIRE = re.compile(r"alimentaire|[ée]picerie|liquides|\bdrive\b|sur
 BALISES = re.compile(r"<[^>]+>")
 
 
+# Pour reconnaître la même annonce publiée sur deux canaux, on compare l'intitulé et l'employeur
+# débarrassés de ce qui varie d'un site à l'autre : « H/F », « (F/H) », « CDI », « SAS »,
+# « France », « Magasin »… Exemple : « Responsable de magasin H/F » chez « Carrefour Market SAS »
+# et « Responsable de magasin (F/H) » chez « CARREFOUR MARKET » sont la même offre.
+MOTS_TITRE = re.compile(r"\b(h f|f h|hf|fh|h|f|m|x|nb|cdi|cdd|temps plein|temps partiel|e|ne)\b")
+MOTS_EMPLOYEUR = re.compile(r"\b(sas|sasu|sarl|sa|eurl|snc|scs|france|groupe|group|magasin|magasins|store|stores"
+                            r"|retail|hypermarche|supermarche|distribution|sa|et cie)\b")
+
+
 def cle_doublon(o):
-    return (normaliser(o.get("intitule")), normaliser(o.get("entreprise")), o.get("dep") or "")
+    titre = " ".join(MOTS_TITRE.sub(" ", normaliser(o.get("intitule"))).split())
+    employeur = " ".join(MOTS_EMPLOYEUR.sub(" ", normaliser(o.get("entreprise"))).split())
+    return (titre, employeur, o.get("dep") or "")
+
+
+DISTANCE_DOUBLON = 15     # km : au-delà, deux offres identiques d'une même enseigne sont deux magasins
+
+
+def distance_km(a, b):
+    r = math.radians
+    h = (math.sin(r(b[0] - a[0]) / 2) ** 2
+         + math.cos(r(a[0])) * math.cos(r(b[0])) * math.sin(r(b[1] - a[1]) / 2) ** 2)
+    return 2 * 6371 * math.asin(math.sqrt(h))
+
+
+class Connues:
+    """Les offres déjà retenues, pour écarter les doublons des canaux suivants.
+
+    Doublon = même intitulé et même employeur (normalisés) et :
+      - même département, quand les deux offres en ont un ;
+      - sinon, des positions à moins de DISTANCE_DOUBLON km.
+    Sans département ni position, on ne peut pas trancher : l'offre est gardée. Une enseigne
+    publie souvent la même annonce pour plusieurs magasins : ce ne sont pas des doublons.
+    Vérifié le 05/10/2026 sur Adzuna : 1 157 doublons sûrs (même département) contre
+    868 offres identiques mais situées à plus de 15 km (d'autres magasins), gardées."""
+
+    def __init__(self, offres):
+        self.par_cle = defaultdict(list)            # (intitulé, employeur) -> [(dép, lat, lon)]
+        for o in offres:
+            self.ajouter(o)
+
+    def ajouter(self, o):
+        t, e, d = cle_doublon(o)
+        self.par_cle[(t, e)].append((d, o.get("lat"), o.get("lon")))
+
+    def __contains__(self, o):
+        t, e, d = cle_doublon(o)
+        if not e:                                   # sans employeur, impossible de trancher : on garde
+            return False
+        for d2, lat2, lon2 in self.par_cle.get((t, e), ()):
+            if d and d2:
+                if d == d2:
+                    return True
+            elif None not in (o.get("lat"), o.get("lon"), lat2, lon2):
+                if distance_km((o["lat"], o["lon"]), (lat2, lon2)) <= DISTANCE_DOUBLON:
+                    return True
+        return False
 
 
 def offres_adzuna(jour, geo, cles_ft):
@@ -388,7 +445,7 @@ def offres_adzuna(jour, geo, cles_ft):
             "temps": {"full_time": "plein", "part_time": "partiel"}.get(o.get("contract_time")),
             "postes": 1,
         }
-        if cle_doublon(offre) in cles_ft:
+        if offre in cles_ft:
             doublons += 1
             continue
         offres.append(offre)
@@ -460,12 +517,19 @@ def offres_lba(cles_connues):
             "temps": None,
             "postes": int(offre.get("opening_count") or 1),
         }
-        if cle_doublon(entree) in cles_connues:
+        if entree in cles_connues:
             doublons += 1
             continue
         offres.append(entree)
     return offres, doublons
 
+
+# Un intitulé de retail : un poste d'encadrement + un lieu de vente (même règle que extraire_wttj.py).
+# Sert aux agrégateurs dont la recherche par mots-clés est trop lâche (Jooble renvoie aussi
+# des « chef de partie » ou des « technicien » pour « responsable de magasin »).
+TITRE_RETAIL = re.compile(r"\b(responsable|directeur|directrice|manager|chef|cheffe|adjoint|adjointe|gerant|gerante)\b"
+                          r".*\b(magasin|boutique|point de vente|rayon|rayons|caisse|caisses|drive|secteur|store)\b"
+                          r"|\bstore manager\b")
 
 SALAIRE_LIBRE = re.compile(r"(\d[\d\s.,]*)\s*(k)?\s*(?:€|eur)", re.I)
 
@@ -507,7 +571,9 @@ def offres_jooble(geo, cles_connues):
     offres, doublons = [], 0
     for oid, v in versions.items():
         o = v["offre"]
-        titre = BALISES.sub("", o.get("title") or "").strip()
+        titre = html.unescape(BALISES.sub("", o.get("title") or "")).strip()
+        if not TITRE_RETAIL.search(normaliser(titre)):
+            continue                              # hors retail : la recherche Jooble est trop lâche
         t = (titre + " " + BALISES.sub(" ", o.get("snippet") or "")).lower()
         lieu = (o.get("location") or "").strip()
         m = re.search(r"\((\d{2,3}|2A|2B)\)", lieu)
@@ -549,7 +615,7 @@ def offres_jooble(geo, cles_connues):
             "temps": "partiel" if "partiel" in type_ else ("plein" if "plein" in type_ else None),
             "postes": 1,
         }
-        if cle_doublon(entree) in cles_connues:
+        if entree in cles_connues:
             doublons += 1
             continue
         offres.append(entree)
@@ -612,7 +678,7 @@ def offres_wttj(geo, cles_connues):
             "temps": None,
             "postes": 1,
         }
-        if cle_doublon(offre) in cles_connues:
+        if offre in cles_connues:
             doublons += 1
             continue
         offres.append(offre)
@@ -683,13 +749,17 @@ def main():
             "postes": int(o.get("nombrePostes") or 1),
         })
     nb_ft = len(offres)
-    adzuna, doublons = offres_adzuna(jour, geo, {cle_doublon(o) for o in offres})
+    connues = Connues(offres)          # une seule liste, enrichie canal après canal
+    adzuna, doublons = offres_adzuna(jour, geo, connues)
     offres.extend(adzuna)
-    wttj, doublons_wttj = offres_wttj(geo, {cle_doublon(o) for o in offres})
+    for o in adzuna: connues.ajouter(o)
+    wttj, doublons_wttj = offres_wttj(geo, connues)
     offres.extend(wttj)
-    lba, doublons_lba = offres_lba({cle_doublon(o) for o in offres})
+    for o in wttj: connues.ajouter(o)
+    lba, doublons_lba = offres_lba(connues)
     offres.extend(lba)
-    jooble, doublons_jooble = offres_jooble(geo, {cle_doublon(o) for o in offres})
+    for o in lba: connues.ajouter(o)
+    jooble, doublons_jooble = offres_jooble(geo, connues)
     offres.extend(jooble)
     geo.sauver()
 

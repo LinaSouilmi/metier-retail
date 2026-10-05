@@ -28,19 +28,22 @@ RACINE = Path(__file__).resolve().parent.parent
 load_dotenv(RACINE / ".env")
 
 URL = os.getenv("JOOBLE_URL", "https://jooble.org/api/")
-LIEU = "France"
+# Jooble ne comprend pas « France » comme lieu : il ne renvoie alors que des offres sans lieu
+# précis, sans rapport avec les mots-clés (essai du 05/10/2026 : 0 offre retail sur 141).
+# On cherche donc ville par ville, dans un rayon de 40 km ; resumer.py ne garde ensuite que les
+# intitulés de retail (TITRE_RETAIL).
+VILLES = ["Paris", "Lyon", "Marseille", "Toulouse", "Lille", "Bordeaux", "Nantes", "Strasbourg",
+          "Montpellier", "Rennes", "Nice", "Clermont-Ferrand"]
+RAYON_KM = "40"
 # Requête (mots-clés) -> code ROME de rattachement, comme pour Adzuna.
 REQUETES = {
     "responsable de magasin": "D1302",
-    "responsable de boutique": "D1302",
-    "store manager": "D1302",
     "directeur de magasin": "D1504",
-    "chef de rayon": "D1503",
     "manager de rayon": "D1503",
     "chef de secteur magasin": "D1510",
-    "responsable de caisse": "D1508",
 }
-PAGES_MAX = 5           # pages de résultats par requête et par jour
+PAGES_MAX = 1           # page de résultats par requête, par ville et par jour
+PAR_PAGE = 50
 PAUSE = 1.5             # secondes entre deux appels
 
 
@@ -70,20 +73,24 @@ def main():
 
     actives, lignes_serie = {}, []
     with (dossier / "brut" / f"{aujourdhui[:7]}.jsonl").open("a", encoding="utf-8") as brut:
-        for requete, rome in REQUETES.items():
+        for (requete, rome), ville in ((rq, v) for rq in REQUETES.items() for v in VILLES):
             total, recuperees, nouvelles = None, 0, 0
             for page in range(1, PAGES_MAX + 1):
                 try:
-                    r = requests.post(URL + cle, json={"keywords": requete, "location": LIEU, "page": str(page)},
+                    r = requests.post(URL + cle, json={"keywords": requete, "location": ville, "radius": RAYON_KM,
+                                                       "page": str(page), "ResultOnPage": str(PAR_PAGE)},
                                       timeout=30)
                     time.sleep(PAUSE)
                     r.raise_for_status()
                     d = r.json()
                 except (requests.RequestException, ValueError) as e:
-                    print(f"Jooble : « {requete} » page {page} a échoué — {e}", flush=True)
+                    print(f"Jooble : « {requete} » {ville} page {page} a échoué — {e}", flush=True)
                     break
                 total = d.get("totalCount", total)
                 lot = d.get("jobs") or []
+                if page == 1:                     # de quoi vérifier dans le journal que la recherche porte
+                    print(f"Jooble  {requete} / {ville} : " + " | ".join(
+                        f"{o.get('title')} ({o.get('location')})" for o in lot[:3]), flush=True)
                 for o in lot:
                     oid = str(o.get("id") or o.get("link"))
                     if oid in actives:
@@ -96,11 +103,12 @@ def main():
                         ids_connus.add(oid)
                         vues.add((oid, e))
                         brut.write(json.dumps({"id": oid, "empreinte": e, "vu_le": aujourdhui, "requete": requete,
-                                               "rome": rome, "offre": o}, ensure_ascii=False) + "\n")
+                                               "ville": ville, "rome": rome, "offre": o}, ensure_ascii=False) + "\n")
                 if not lot:
                     break
-            lignes_serie.append([aujourdhui, requete, total if total is not None else "", recuperees, nouvelles])
-            print(f"Jooble  {requete:<26} {recuperees:4d} récupérées sur {total}, {nouvelles:4d} nouvelles", flush=True)
+            lignes_serie.append([aujourdhui, f"{requete} / {ville}", total if total is not None else "",
+                                 recuperees, nouvelles])
+            print(f"Jooble  {requete} / {ville} : {recuperees} récupérées sur {total}, {nouvelles} nouvelles", flush=True)
 
     with (dossier / "actives" / f"{aujourdhui}.csv").open("w", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
