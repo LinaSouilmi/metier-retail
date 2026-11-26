@@ -313,8 +313,10 @@ class Geocodeur:
 
 
 def normaliser(s):
-    """'Île-de-France' -> 'ile de france' : sans accents, sans casse, sans ponctuation."""
-    s = unicodedata.normalize("NFKD", s or "").encode("ascii", "ignore").decode().lower()
+    """'Île-de-France' -> 'ile de france' : sans accents, sans casse, sans ponctuation.
+    L'apostrophe typographique compte comme l'apostrophe simple (« d’optique » = « d'optique »)."""
+    s = (s or "").replace("’", "'").replace("‘", "'").replace("œ", "oe").replace("Œ", "oe").replace("æ", "ae")
+    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
     return " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
 
 
@@ -362,25 +364,30 @@ class Connues:
     Doublon = même intitulé et même employeur (normalisés) et :
       - même département, quand les deux offres en ont un ;
       - sinon, des positions à moins de DISTANCE_DOUBLON km.
-    Sans département ni position, on ne peut pas trancher : l'offre est gardée. Une enseigne
+      - ou, à défaut, exactement le même lieu écrit (« Pays de la Loire », « Corse » : offres
+        sans département ni position, vérifié le 26/11/2026).
+    Sans aucun de ces repères, on ne peut pas trancher : l'offre est gardée. Une enseigne
     publie souvent la même annonce pour plusieurs magasins : ce ne sont pas des doublons.
     Vérifié le 05/10/2026 sur Adzuna : 1 157 doublons sûrs (même département) contre
     868 offres identiques mais situées à plus de 15 km (d'autres magasins), gardées."""
 
     def __init__(self, offres):
-        self.par_cle = defaultdict(list)            # (intitulé, employeur) -> [(dép, lat, lon)]
+        self.par_cle = defaultdict(list)            # (intitulé, employeur) -> [(dép, lat, lon, lieu)]
         for o in offres:
             self.ajouter(o)
 
     def ajouter(self, o):
         t, e, d = cle_doublon(o)
-        self.par_cle[(t, e)].append((d, o.get("lat"), o.get("lon")))
+        self.par_cle[(t, e)].append((d, o.get("lat"), o.get("lon"), normaliser(o.get("lieu"))))
 
     def __contains__(self, o):
         t, e, d = cle_doublon(o)
         if not e:                                   # sans employeur, impossible de trancher : on garde
             return False
-        for d2, lat2, lon2 in self.par_cle.get((t, e), ()):
+        lieu = normaliser(o.get("lieu"))
+        for d2, lat2, lon2, lieu2 in self.par_cle.get((t, e), ()):
+            if lieu and lieu == lieu2:
+                return True
             if d and d2:
                 if d == d2:
                     return True
@@ -510,10 +517,11 @@ def offres_adzuna(jour, geo, cles_ft, historique=False):
 
 
 def sans_republications(offres):
-    """Une annonce republiée reçoit un nouvel identifiant chez Adzuna : sur 45 jours, elle s'accumule
-    (constat du 26/11/2026 : 26 562 offres pour 16 668 annonces distinctes, dont une offre Carrefour
-    présente 71 fois). On n'en garde qu'une par intitulé + employeur (normalisés) + lieu exact,
-    la plus récente. Deux magasins d'une même enseigne ont des lieux différents : ils restent deux.
+    """Une annonce republiée reçoit un nouvel identifiant (Adzuna, France Travail, Jooble…) et
+    s'accumule (constat du 26/11/2026 : 26 562 offres Adzuna pour 16 668 annonces distinctes, dont
+    une offre Carrefour présente 71 fois). On n'en garde qu'une par intitulé + employeur
+    (normalisés) + lieu exact, la plus récente, avec la première et la dernière vue de l'ensemble.
+    Deux magasins d'une même enseigne ont des lieux différents : ils restent deux.
     Sans employeur, on ne peut pas trancher : l'offre est gardée."""
     gardees, sans_employeur = {}, []
     for o in offres:
@@ -822,18 +830,22 @@ def offres_france_travail(geo, historique=False):
 
 def construire(jour, geo, historique):
     """Toutes les sources, doublons entre canaux écartés (France Travail d'abord, puis les autres)."""
-    offres = offres_france_travail(geo, historique)
-    stats = {"France Travail": (len(offres), 0)}
+    # Chaque source republie aussi ses propres annonces sous un nouvel identifiant (vérifié le
+    # 26/11/2026 sur l'historique : 5 933 republications chez France Travail, 543 chez Jooble) :
+    # on n'en garde qu'une par source, avant de comparer les sources entre elles.
+    offres, republiees = sans_republications(offres_france_travail(geo, historique))
+    stats = {"France Travail": (len(offres), 0, republiees)}
     connues = Connues(offres)          # une seule liste, enrichie canal après canal
     for nom, f in (("Adzuna", lambda: offres_adzuna(jour, geo, connues, historique)),
                    ("Welcome to the Jungle", lambda: offres_wttj(geo, connues, historique)),
                    ("La bonne alternance", lambda: offres_lba(connues, historique)),
                    ("Jooble", lambda: offres_jooble(geo, connues, historique))):
         lot, doublons = f()
+        lot, republiees = sans_republications(lot)
         offres.extend(lot)
         for o in lot:
             connues.ajouter(o)
-        stats[nom] = (len(lot), doublons)
+        stats[nom] = (len(lot), doublons, republiees)
     return offres, stats
 
 
@@ -930,7 +942,8 @@ def main():
         print(f"\nÉcrit : {sortie.relative_to(RACINE)} — {len(offres)} offres "
               f"({'historique depuis le ' + debut if historique else 'actuelles au ' + jour}), "
               f"{sortie.stat().st_size // 1024} Ko")
-        print("Sources : " + ", ".join(f"{n} {k} ({d} doublons écartés)" for n, (k, d) in stats.items()))
+        print("Sources : " + ", ".join(f"{n} {k} ({d} doublons entre sources, {r} republications écartés)"
+                                       for n, (k, d, r) in stats.items()))
         avec = [o for o in offres if o["smin"] is not None]
         print(f"Salaire affiché par {len(avec)} offres sur {len(offres)} "
               f"({100 * len(avec) // len(offres) if offres else 0} %)")
