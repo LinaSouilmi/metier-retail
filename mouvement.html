@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Le marché bouge — les métiers du retail</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-<link rel="stylesheet" href="assets/commun.css?v=5">
+<link rel="stylesheet" href="assets/commun.css?v=6">
 </head>
 <body>
 <main>
@@ -22,6 +22,15 @@
       <p class="note">Une annonce en ligne depuis plus de trois mois est souvent déjà pourvue, ou republiée en continu par une agence : candidatez d'abord aux fraîches.</p></div>
   </div>
 
+  <h2>Dans le temps <small>— mode « Toutes les offres depuis le début »</small></h2>
+  <p class="note" id="invite-historique" hidden>Choisissez « Toutes les offres depuis le début » en haut de page pour voir les offres apparues chaque semaine et le temps qu'elles restent en ligne.</p>
+  <div class="grille" id="bloc-historique" hidden>
+    <div class="carte"><h3>Offres apparues chaque semaine, par source</h3><div class="zone"><canvas id="g-semaines"></canvas></div>
+      <p class="note" id="note-semaines"></p></div>
+    <div class="carte"><h3>Combien de temps une offre reste en ligne</h3><div class="zone"><canvas id="g-duree"></canvas></div>
+      <p class="note" id="note-duree"></p></div>
+  </div>
+
   <h2 id="limites">Ce que ces chiffres n'autorisent pas à conclure</h2>
   <p class="note">Quatre canaux : France Travail (qui reprend déjà une cinquantaine de sites partenaires), Adzuna (agrégateur, offres de moins de 45 jours), Welcome to the Jungle (offres retail de son plan du site, surtout de grandes enseignes et des marques) et La bonne alternance (offres en alternance uniquement). Une offre déjà présente dans un canal précédent est écartée quand l'intitulé, l'employeur et le département coïncident. Aucun ne couvre tout : APEC, LinkedIn ou Indeed publient d'autres offres, qu'on ne collecte pas (leurs conditions d'utilisation l'interdisent).
   Les offres Adzuna sont moins détaillées : ni expérience, ni formation, ni compétences ; leurs salaires ne sont retenus que s'ils sont affichés par l'employeur, pas estimés par Adzuna. La courbe des extractions ne suit que France Travail.
@@ -33,12 +42,13 @@
   Un seul annonceur peut fausser une colonne entière : une grande enseigne ou un réseau de franchise qui publie la même annonce dans chaque magasin gonfle les chiffres sans qu'il s'agisse d'autant de postes différents. Le filtre « Indépendant » permet de mettre de côté les franchises et gérances.
   L'API France Travail renvoie au plus 1 150 offres par métier : les métiers qui atteignent ce plafond sont sous-comptés.
   Une mention « IA » dans une annonce n'est pas une compétence exigée : il faut lire dix annonces pour dire ce que le mot recouvre.
+  En mode « Toutes les offres depuis le début », chaque offre vue au moins une fois compte pour une : ce cumul n'est pas le nombre de postes ouverts à un moment donné, et une offre restée longtemps en ligne pèse autant qu'une offre retirée le lendemain.
   La grille d'outils est la nôtre, elle est dans <code>scripts/resumer.py</code>. Un point placé au centre d'une commune ou d'un département n'est pas l'adresse de l'employeur.</p>
 
   <footer id="pied"></footer>
 </main>
 
-<script src="assets/commun.js?v=5"></script>
+<script src="assets/commun.js?v=6"></script>
 <script>
 /* ============ Le marché bouge ============ */
 function rendre(offres, D) {
@@ -55,6 +65,37 @@ function rendre(offres, D) {
   const FRAIS = [["Moins de 7 jours", j => j < 7], ["7 à 30 jours", j => j >= 7 && j < 30], ["1 à 3 mois", j => j >= 30 && j < 90], ["Plus de 3 mois", j => j >= 90]];
   const ages = offres.map(age).filter(j => j != null && j >= 0);
   barres("g-fraicheur", FRAIS.map(x => x[0]), FRAIS.map(([, test]) => ages.filter(test).length), true, " offres");
+
+  /* ---- Historique : apparitions par semaine, durée en ligne ---- */
+  const hist = D.periode === "historique";
+  document.getElementById("bloc-historique").hidden = !hist;
+  document.getElementById("invite-historique").hidden = hist;
+  if (!hist) return;
+  const jour = s => Date.parse(s + "T00:00:00Z");
+  const lundi = s => { const t = new Date(jour(s)); t.setUTCDate(t.getUTCDate() - ((t.getUTCDay() + 6) % 7)); return t.toISOString().slice(0, 10); };
+  const SRC = { "France Travail": "#0a5cff", "Adzuna": "#ff6a00", "Jooble": "#8e44ad", "La bonne alternance": "#2e9e5b", "Welcome to the Jungle": "#f5b800" };
+  const datees = offres.filter(o => o.premiere_vue);
+  const semaines = [...new Set(datees.map(o => lundi(o.premiere_vue)))].sort();
+  const sources = Object.keys(SRC).filter(s => offres.some(o => o.source === s));
+  dessiner("g-semaines", "bar",
+    { labels: semaines.map(s => "sem. du " + dateFr(s, true)),
+      datasets: sources.map(s => ({ label: s, backgroundColor: SRC[s],
+        data: semaines.map(w => datees.filter(o => o.source === s && lundi(o.premiere_vue) === w).length) })) },
+    { plugins: { legend: { display: true, position: "bottom" } },
+      scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, title: { display: true, text: "nouvelles offres" } } } });
+  document.getElementById("note-semaines").textContent =
+    `Semaine de première apparition de chaque offre, ${offres.length} offres au total. La première semaine de chaque source compte tout le stock d'offres déjà en ligne au début de la collecte : ce n'est pas un pic d'embauche.`;
+
+  // Durée en ligne : seulement les offres disparues (celles encore en ligne n'ont pas fini) et les
+  // sources dont on note chaque jour la présence (Adzuna : seulement depuis le 26/11/2026).
+  const finies = datees.filter(o => o.source !== "Adzuna" && o.derniere_vue && o.derniere_vue < D.date);
+  const DUREES = [["1 jour", d => d <= 1], ["2 à 7 jours", d => d > 1 && d <= 7], ["8 à 30 jours", d => d > 7 && d <= 30],
+                  ["31 à 60 jours", d => d > 30 && d <= 60], ["Plus de 60 jours", d => d > 60]];
+  const durees = finies.map(o => (jour(o.derniere_vue) - jour(o.premiere_vue)) / 864e5 + 1);
+  barres("g-duree", DUREES.map(x => x[0]), DUREES.map(([, test]) => durees.filter(test).length), true, " offres");
+  document.getElementById("note-duree").textContent = durees.length
+    ? `${durees.length} offres retirées depuis le début de la collecte (hors Adzuna, dont la présence n'est notée chaque jour que depuis le 26/11/2026). Durée médiane en ligne : ${Math.round(mediane(durees))} jours. Une offre déjà en ligne au premier jour de collecte paraît plus courte qu'elle ne l'a été.`
+    : "Aucune offre retirée parmi la sélection.";
 }
 
 Commun.demarrer(rendre);
