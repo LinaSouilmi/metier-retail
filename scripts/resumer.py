@@ -314,9 +314,10 @@ class Geocodeur:
 
 def normaliser(s):
     """'Île-de-France' -> 'ile de france' : sans accents, sans casse, sans ponctuation.
-    L'apostrophe typographique compte comme l'apostrophe simple (« d’optique » = « d'optique »)."""
-    s = (s or "").replace("’", "'").replace("‘", "'").replace("œ", "oe").replace("Œ", "oe").replace("æ", "ae")
-    s = unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode().lower()
+    Tout signe qui n'est ni lettre ni chiffre sépare les mots : « d’optique » = « d'optique »,
+    « adjoint·e » = « adjoint.e » (point médian de l'écriture inclusive, vérifié le 26/11/2026)."""
+    s = (s or "").replace("œ", "oe").replace("Œ", "oe").replace("æ", "ae").replace("Æ", "ae")
+    s = "".join(c for c in unicodedata.normalize("NFKD", s) if not unicodedata.combining(c)).lower()
     return " ".join(re.sub(r"[^a-z0-9]+", " ", s).split())
 
 
