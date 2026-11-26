@@ -109,7 +109,7 @@ def main():
     vues = versions_connues()
     ids_connus = {i for i, _ in vues}
 
-    lignes_serie = []
+    lignes_serie, vues_aujourdhui = [], {}
     with (dossier / "brut" / f"{aujourdhui[:7]}.jsonl").open("a", encoding="utf-8") as brut:
         for expression, rome in REQUETES.items():
             try:
@@ -121,6 +121,7 @@ def main():
             nouvelles = 0
             for o in offres:
                 oid = str(o.get("id"))
+                vues_aujourdhui.setdefault(oid, rome)
                 e = empreinte(o)
                 if (oid, e) in vues:
                     continue
@@ -133,6 +134,13 @@ def main():
             lignes_serie.append([aujourdhui, expression, total if total is not None else len(offres),
                                  len(offres), nouvelles])
             print(f"Adzuna  {expression:<28} {len(offres):4d} récupérées sur {total}, {nouvelles:4d} nouvelles")
+
+    # Liste des offres vues aujourd'hui : donne leur dernier jour de présence (historique du site).
+    (dossier / "actives").mkdir(parents=True, exist_ok=True)
+    with (dossier / "actives" / f"{aujourdhui}.csv").open("w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(["id", "rome"])
+        w.writerows(sorted(vues_aujourdhui.items()))
 
     serie = dossier / "serie.csv"
     lignes = []

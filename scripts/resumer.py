@@ -390,22 +390,63 @@ class Connues:
         return False
 
 
-def offres_adzuna(jour, geo, cles_ft):
-    """Offres Adzuna récentes, au même format que celles de France Travail."""
-    fichiers = sorted((RACINE / "data" / "adzuna" / "brut").glob("*.jsonl"))
-    versions = {}
-    for f in fichiers:
+# ---------------------------------------------------------------------------
+# Deux résumés : les offres actuelles (data/resume.json) et tout l'historique depuis le début
+# de la collecte (data/historique.json). Pour l'historique, chaque offre porte le premier et le
+# dernier jour où elle a été vue en ligne, lus dans les listes quotidiennes data/.../actives/.
+
+_ARCHIVES = {}
+
+
+def charger_versions(nom, fichiers, cle="id"):
+    """Dernière version de chaque offre d'une archive brute, et le jour où on l'a vue la première
+    fois. Lu une seule fois par source, puis réutilisé par les deux résumés."""
+    if nom not in _ARCHIVES:
+        versions, premiere = {}, {}
+        for f in fichiers:
+            with f.open(encoding="utf-8") as fh:
+                for ligne in fh:
+                    if ligne.strip():
+                        v = json.loads(ligne)
+                        premiere.setdefault(v[cle], v["vu_le"])
+                        versions[v[cle]] = v
+        _ARCHIVES[nom] = (versions, premiere)
+    return _ARCHIVES[nom]
+
+
+def presences(dossier, cle="id"):
+    """{offre: (premier jour, dernier jour, code ROME)} d'après les listes quotidiennes des offres
+    en ligne (un fichier <AAAA-MM-JJ>.csv par jour), et le dernier jour de liste."""
+    vues, dernier = {}, None
+    for f in sorted(dossier.glob("*.csv")):
+        dernier = f.stem
         with f.open(encoding="utf-8") as fh:
-            for ligne in fh:
-                if ligne.strip():
-                    v = json.loads(ligne)
-                    versions[v["id"]] = v
+            for r in csv.DictReader(fh):
+                i = r[cle]
+                vues[i] = (vues[i][0], dernier, vues[i][2]) if i in vues else (dernier, dernier, r.get("rome"))
+    return vues, dernier
+
+
+def bornes(oid, pres, premiere, v):
+    """(première vue, dernière vue) d'une offre : listes quotidiennes quand elles existent, sinon
+    dates d'écriture des versions (Adzuna n'a ses listes quotidiennes que depuis le 26/11/2026)."""
+    p = pres.get(oid)
+    debut = min(x for x in (p[0] if p else None, premiere.get(oid), v["vu_le"]) if x)
+    fin = max(x for x in (p[1] if p else None, v["vu_le"]) if x)
+    return debut, fin
+
+
+def offres_adzuna(jour, geo, cles_ft, historique=False):
+    """Offres Adzuna, au même format que celles de France Travail. Actuelles : publiées depuis
+    moins de JOURS_ADZUNA jours. Historique : toutes celles vues depuis le début."""
+    versions, premiere = charger_versions("adzuna", sorted((RACINE / "data" / "adzuna" / "brut").glob("*.jsonl")))
+    pres, _ = presences(RACINE / "data" / "adzuna" / "actives")
     limite = f"{date.fromisoformat(jour) - timedelta(days=JOURS_ADZUNA):%Y-%m-%d}"
     offres, doublons = [], 0
     for oid, v in versions.items():
         o = v["offre"]
         cree = (o.get("created") or "")[:10]
-        if cree and cree < limite:
+        if not historique and cree and cree < limite:
             continue
         intitule = BALISES.sub("", o.get("title") or "").strip()
         description = BALISES.sub("", o.get("description") or "")
@@ -441,6 +482,7 @@ def offres_adzuna(jour, geo, cles_ft):
             "smin": smin, "smax": smax,
             "date": cree,
             "vu_le": v["vu_le"],
+            "premiere_vue": bornes(oid, pres, premiere, v)[0], "derniere_vue": bornes(oid, pres, premiere, v)[1],
             "url": o.get("redirect_url"),
             "outils": [nom for nom, rx in REGEX_OUTILS.items() if rx.search(t)],
             "teletravail": "télétravail" in t,
@@ -480,8 +522,15 @@ def sans_republications(offres):
             sans_employeur.append(o)
             continue
         cle = (t, e, normaliser(o.get("lieu")))
-        if cle not in gardees or (o["date"] or "", o["vu_le"]) > (gardees[cle]["date"] or "", gardees[cle]["vu_le"]):
+        g = gardees.get(cle)
+        if g is None:
             gardees[cle] = o
+            continue
+        # L'annonce gardée couvre toute la période de ses republications.
+        debut, fin = min(g["premiere_vue"], o["premiere_vue"]), max(g["derniere_vue"], o["derniere_vue"])
+        if (o["date"] or "", o["vu_le"]) > (g["date"] or "", g["vu_le"]):
+            gardees[cle] = g = o
+        g["premiere_vue"], g["derniere_vue"] = debut, fin
     resultat = list(gardees.values()) + sans_employeur
     return resultat, len(offres) - len(resultat)
 
@@ -489,23 +538,17 @@ def sans_republications(offres):
 DIPLOMES_EUROPEENS = {"3": "< Bac", "4": "Bac", "5": "Bac+2", "6": "Bac+3/4", "7": "Bac+5"}
 
 
-def offres_lba(cles_connues):
-    """Offres en alternance de La bonne alternance (scripts/extraire_lba.py), au format commun."""
-    jours = sorted((RACINE / "data" / "lba" / "actives").glob("*.csv"))
-    if not jours:
+def offres_lba(cles_connues, historique=False):
+    """Offres en alternance de La bonne alternance (scripts/extraire_lba.py), au format commun.
+    Actuelles : vues à la dernière collecte. Historique : toutes celles vues depuis le début."""
+    pres, dernier = presences(RACINE / "data" / "lba" / "actives")
+    if not pres:
         return [], 0
-    with jours[-1].open(encoding="utf-8") as f:
-        actives = {r["id"]: r["rome"] for r in csv.DictReader(f)}
-    versions = {}
-    for f in sorted((RACINE / "data" / "lba" / "brut").glob("*.jsonl")):
-        with f.open(encoding="utf-8") as fh:
-            for ligne in fh:
-                if ligne.strip():
-                    v = json.loads(ligne)
-                    if v["id"] in actives:
-                        versions[v["id"]] = v
+    versions, premiere = charger_versions("lba", sorted((RACINE / "data" / "lba" / "brut").glob("*.jsonl")))
     offres, doublons = [], 0
     for oid, v in versions.items():
+        if oid not in pres or (not historique and pres[oid][1] != dernier):
+            continue
         o = v["offre"]
         lieu = o.get("workplace") or {}
         loc = lieu.get("location") or {}
@@ -522,7 +565,7 @@ def offres_lba(cles_connues):
         ville = re.sub(r"^.*\b\d{5}\s*", "", adresse).strip() if cp else adresse
         entree = {
             "id": "LB" + oid,
-            "rome": codes[0] if codes else actives[oid],
+            "rome": codes[0] if codes else (pres[oid][2] or v["rome"]),
             "source": "La bonne alternance",
             "partenaire": (o.get("identifier") or {}).get("partner_label"),
             "intitule": titre,
@@ -537,6 +580,7 @@ def offres_lba(cles_connues):
             "smin": None, "smax": None,
             "date": ((offre.get("publication") or {}).get("creation") or "")[:10],
             "vu_le": v["vu_le"],
+            "premiere_vue": bornes(oid, pres, premiere, v)[0], "derniere_vue": bornes(oid, pres, premiere, v)[1],
             "url": (o.get("apply") or {}).get("url"),
             "outils": [nom for nom, rx in REGEX_OUTILS.items() if rx.search(t)],
             "teletravail": contrat.get("remote") in ("hybrid", "remote"),
@@ -587,25 +631,19 @@ def salaire_texte(lib):
     return (round(min(vals)), round(max(vals))) if vals else (None, None)
 
 
-def offres_jooble(geo, cles_connues):
-    """Offres Jooble vues à la dernière collecte (scripts/extraire_jooble.py), au format commun."""
-    jours = sorted((RACINE / "data" / "jooble" / "actives").glob("*.csv"))
-    if not jours:
+def offres_jooble(geo, cles_connues, historique=False):
+    """Offres Jooble (scripts/extraire_jooble.py), au format commun. Actuelles : vues à la
+    dernière collecte. Historique : toutes celles vues depuis le début."""
+    pres, dernier = presences(RACINE / "data" / "jooble" / "actives")
+    if not pres:
         return [], 0
-    with jours[-1].open(encoding="utf-8") as f:
-        actives = {r["id"]: r["rome"] for r in csv.DictReader(f)}
-    versions = {}
-    for f in sorted((RACINE / "data" / "jooble" / "brut").glob("*.jsonl")):
-        with f.open(encoding="utf-8") as fh:
-            for ligne in fh:
-                if ligne.strip():
-                    v = json.loads(ligne)
-                    # Seules comptent les offres du site français de Jooble : les premières
-                    # collectes interrogeaient jooble.org, qui sert le marché américain.
-                    if v["id"] in actives and v.get("hote") == "fr.jooble.org":
-                        versions[v["id"]] = v
+    versions, premiere = charger_versions("jooble", sorted((RACINE / "data" / "jooble" / "brut").glob("*.jsonl")))
     offres, doublons = [], 0
     for oid, v in versions.items():
+        # Seules comptent les offres du site français de Jooble : les premières collectes
+        # interrogeaient jooble.org, qui sert le marché américain.
+        if v.get("hote") != "fr.jooble.org" or oid not in pres or (not historique and pres[oid][1] != dernier):
+            continue
         o = v["offre"]
         titre = html.unescape(BALISES.sub("", o.get("title") or "")).strip()
         if not TITRE_RETAIL.search(normaliser(titre)):
@@ -649,6 +687,7 @@ def offres_jooble(geo, cles_connues):
             "smin": smin, "smax": smax,
             "date": (o.get("updated") or "")[:10],
             "vu_le": v["vu_le"],
+            "premiere_vue": bornes(oid, pres, premiere, v)[0], "derniere_vue": bornes(oid, pres, premiere, v)[1],
             "url": o.get("link"),
             "outils": [nom for nom, rx in REGEX_OUTILS.items() if rx.search(t)],
             "teletravail": "télétravail" in t,
@@ -670,23 +709,17 @@ def offres_jooble(geo, cles_connues):
     return offres, doublons
 
 
-def offres_wttj(geo, cles_connues):
-    """Offres Welcome to the Jungle actives (scripts/extraire_wttj.py), au format commun."""
-    jours = sorted((RACINE / "data" / "wttj" / "actives").glob("*.csv"))
-    if not jours:
+def offres_wttj(geo, cles_connues, historique=False):
+    """Offres Welcome to the Jungle (scripts/extraire_wttj.py), au format commun. Actuelles :
+    présentes dans le plan du site au dernier passage. Historique : toutes celles lues."""
+    pres, dernier = presences(RACINE / "data" / "wttj" / "actives", cle="url")
+    if not pres:
         return [], 0
-    with jours[-1].open(encoding="utf-8") as f:
-        actives = {r["url"] for r in csv.DictReader(f)}
-    versions = {}
-    for f in sorted((RACINE / "data" / "wttj" / "brut").glob("*.jsonl")):
-        with f.open(encoding="utf-8") as fh:
-            for ligne in fh:
-                if ligne.strip():
-                    v = json.loads(ligne)
-                    if v["url"] in actives:
-                        versions[v["url"]] = v
+    versions, premiere = charger_versions("wttj", sorted((RACINE / "data" / "wttj" / "brut").glob("*.jsonl")), cle="url")
     offres, doublons = [], 0
     for url, v in versions.items():
+        if url not in pres or (not historique and pres[url][1] != dernier):
+            continue
         o = v["offre"]
         cp = o.get("code_postal") or ""
         dep = departement({"codePostal": cp})
@@ -712,6 +745,7 @@ def offres_wttj(geo, cles_connues):
             "smin": smin, "smax": smax,
             "date": o.get("publiee"),
             "vu_le": v["vu_le"],
+            "premiere_vue": bornes(url, pres, premiere, v)[0], "derniere_vue": bornes(url, pres, premiere, v)[1],
             "url": url,
             "outils": o.get("outils") or [],
             "teletravail": bool(o.get("teletravail")),
@@ -733,30 +767,15 @@ def offres_wttj(geo, cles_connues):
     return offres, doublons
 
 
-def main():
-    jours = sorted((RACINE / "data" / "actives").glob("*.csv"))
-    if not jours:
-        raise SystemExit("Aucune extraction : lancez d'abord scripts/extraire.py")
-    jour = jours[-1].stem
-    with jours[-1].open(encoding="utf-8") as f:
-        actives = [(r["rome"], r["id"]) for r in csv.DictReader(f)]
-    ids_actifs = {i for _, i in actives}
-
-    # Dernière version connue de chaque offre active (les fichiers sont lus dans l'ordre des mois).
-    versions = {}
-    for f in sorted((RACINE / "data" / "brut").glob("*/*.jsonl")):
-        with f.open(encoding="utf-8") as fh:
-            for ligne in fh:
-                if ligne.strip():
-                    v = json.loads(ligne)
-                    if v["id"] in ids_actifs:
-                        versions[v["id"]] = v
-    nb_versions = sum(1 for f in (RACINE / "data" / "brut").glob("*/*.jsonl")
-                      for l in f.open(encoding="utf-8") if l.strip())
-
-    geo = Geocodeur()
+def offres_france_travail(geo, historique=False):
+    """Offres France Travail : celles de la dernière liste du jour (actuelles), ou toutes celles
+    vues depuis le début (historique), avec la dernière version connue de chaque annonce."""
+    pres, dernier = presences(RACINE / "data" / "actives")
+    versions, premiere = charger_versions("france_travail", sorted((RACINE / "data" / "brut").glob("*/*.jsonl")))
     offres = []
-    for rome, oid in actives:
+    for oid, (debut_liste, fin_liste, rome) in pres.items():
+        if not historique and fin_liste != dernier:
+            continue
         v = versions.get(oid)
         if not v:
             continue
@@ -766,6 +785,7 @@ def main():
         t = texte.lower()
         smin, smax = salaire_min_max((o.get("salaire") or {}).get("libelle"))
         lat, lon, precision = geo.position(lieu)
+        debut, fin = bornes(oid, pres, premiere, v)
         offres.append({
             "id": oid,
             "rome": rome,
@@ -782,6 +802,7 @@ def main():
             "smin": smin, "smax": smax,
             "date": (o.get("dateCreation") or "")[:10],
             "vu_le": v["vu_le"],
+            "premiere_vue": debut, "derniere_vue": fin,
             "url": (o.get("origineOffre") or {}).get("urlOrigine"),
             "outils": [nom for nom, rx in REGEX_OUTILS.items() if rx.search(t)],
             "teletravail": "télétravail" in t,
@@ -796,69 +817,125 @@ def main():
             "temps": temps_travail(o),
             "postes": int(o.get("nombrePostes") or 1),
         })
-    nb_ft = len(offres)
+    return offres
+
+
+def construire(jour, geo, historique):
+    """Toutes les sources, doublons entre canaux écartés (France Travail d'abord, puis les autres)."""
+    offres = offres_france_travail(geo, historique)
+    stats = {"France Travail": (len(offres), 0)}
     connues = Connues(offres)          # une seule liste, enrichie canal après canal
-    adzuna, doublons = offres_adzuna(jour, geo, connues)
-    offres.extend(adzuna)
-    for o in adzuna: connues.ajouter(o)
-    wttj, doublons_wttj = offres_wttj(geo, connues)
-    offres.extend(wttj)
-    for o in wttj: connues.ajouter(o)
-    lba, doublons_lba = offres_lba(connues)
-    offres.extend(lba)
-    for o in lba: connues.ajouter(o)
-    jooble, doublons_jooble = offres_jooble(geo, connues)
-    offres.extend(jooble)
-    geo.sauver()
+    for nom, f in (("Adzuna", lambda: offres_adzuna(jour, geo, connues, historique)),
+                   ("Welcome to the Jungle", lambda: offres_wttj(geo, connues, historique)),
+                   ("La bonne alternance", lambda: offres_lba(connues, historique)),
+                   ("Jooble", lambda: offres_jooble(geo, connues, historique))):
+        lot, doublons = f()
+        offres.extend(lot)
+        for o in lot:
+            connues.ajouter(o)
+        stats[nom] = (len(lot), doublons)
+    return offres, stats
 
-    # Série : par jour et par métier
-    serie = defaultdict(dict)
-    with (RACINE / "data" / "serie.csv").open(encoding="utf-8") as f:
-        for r in csv.DictReader(f):
-            serie[r["date"]][r["rome"]] = int(r["total"])
 
-    resume = {
+def resume_de(offres, jour, serie, nb_versions, historique, debut):
+    present = lambda s: any(o["source"] == s for o in offres)
+    return {
         "date": jour,
-        "source": "France Travail — API Offres d'emploi v2" + (" + The Adzuna API" if adzuna else "")
-                  + (" + Welcome to the Jungle" if wttj else "")
-                  + (" + La bonne alternance" if lba else "")
-                  + (" + Jooble" if jooble else ""),
-        "requete": "une requête codeROME par métier, France entière"
-                   + (f" ; Adzuna : offres de moins de {JOURS_ADZUNA} jours" if adzuna else "")
-                   + (" ; Welcome to the Jungle : offres retail du plan du site" if wttj else "")
-                   + (" ; La bonne alternance : offres en alternance hors France Travail" if lba else "")
-                   + (" ; Jooble : offres vues à la dernière collecte" if jooble else "")
-                   + (", doublons écartés" if adzuna or wttj or lba or jooble else ""),
+        "periode": "historique" if historique else "actuelles",
+        "debut": debut,
+        "source": "France Travail — API Offres d'emploi v2" + (" + The Adzuna API" if present("Adzuna") else "")
+                  + (" + Welcome to the Jungle" if present("Welcome to the Jungle") else "")
+                  + (" + La bonne alternance" if present("La bonne alternance") else "")
+                  + (" + Jooble" if present("Jooble") else ""),
+        "requete": ("toutes les offres vues au moins une fois depuis le début de la collecte, doublons écartés"
+                    if historique else
+                    "une requête codeROME par métier, France entière"
+                    f" ; Adzuna : offres de moins de {JOURS_ADZUNA} jours"
+                    " ; Welcome to the Jungle : offres retail du plan du site"
+                    " ; La bonne alternance : offres en alternance hors France Travail"
+                    " ; Jooble : offres vues à la dernière collecte, doublons écartés"),
         "sources": [s for s in ("France Travail", "Adzuna", "Welcome to the Jungle", "La bonne alternance", "Jooble")
-                    if any(o["source"] == s for o in offres)],
+                    if present(s)],
         "metiers": [{"code": c, "libelle": l, "groupe": g, "coche": k,
                      "actives": sum(1 for o in offres if o["rome"] == c)}
                     for c, (l, g, k) in METIERS.items()],
         "outils": list(OUTILS),
-        "contrats": {c: contrat_libelle(c)
-                     for c in sorted({o["contrat"] for o in offres if o["contrat"]})},
+        "contrats": {c: contrat_libelle(c) for c in sorted({o["contrat"] for o in offres if o["contrat"]})},
         "niveaux": NIVEAUX_LIBELLES,
         "formations": FORMATIONS,
         "versions_conservees": nb_versions,
         "sans_position": sum(1 for o in offres if o["lat"] is None),
         "serie": [{"date": d, "par_metier": m} for d, m in sorted(serie.items())],
-        "offres": offres,
     }
-    sortie = RACINE / "data" / "resume.json"
-    sortie.write_text(json.dumps(resume, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
-    prec = defaultdict(int)
+
+
+# Format compact de l'historique : 45 000 offres et plus ne tiennent pas dans le format de
+# resume.json (16 Mo pour 23 000 offres). Une ligne par offre, colonnes dans l'ordre de COLONNES ;
+# outils et compétences codés par leur numéro dans les listes « outils » et « competences ».
+# Le site (assets/commun.js) redéplie chaque ligne en objet au chargement.
+COLONNES = ["id", "rome", "source", "intitule", "entreprise", "lieu", "dep", "lat", "lon", "prec", "contrat",
+            "alternance", "salaire", "smin", "smax", "date", "premiere_vue", "derniere_vue", "url", "outils",
+            "competences", "niveau", "nature", "exp_exige", "exp_ans", "qualification", "formation", "secteur"]
+
+
+def compacter(resume, offres):
+    index_outils = {nom: i for i, nom in enumerate(resume["outils"])}
+    vocab, index_comp = [], {}
+    lignes = []
     for o in offres:
-        prec[o["prec"]] += 1
-    print(f"Écrit : {sortie.relative_to(RACINE)} — {len(offres)} offres actives du {jour}, "
-          f"{sortie.stat().st_size // 1024} Ko")
-    print(f"Sources : {nb_ft} France Travail, {len(adzuna)} Adzuna ({doublons} doublons écartés), "
-          f"{len(wttj)} Welcome to the Jungle ({doublons_wttj} doublons écartés), "
-          f"{len(lba)} La bonne alternance ({doublons_lba} doublons écartés), "
-          f"{len(jooble)} Jooble ({doublons_jooble} doublons écartés)")
-    print(f"Positions : {dict(prec)} ({geo.appels} appels geo.api.gouv.fr)")
-    avec = [o for o in offres if o["smin"] is not None]
-    part = 100 * len(avec) // len(offres) if offres else 0
-    print(f"Salaire affiché par {len(avec)} offres sur {len(offres)} ({part} %)")
+        ligne = []
+        for c in COLONNES:
+            x = o.get(c)
+            if c == "outils":
+                x = [index_outils[n] for n in x]
+            elif c == "competences":
+                codes = []
+                for n in x or []:
+                    if n not in index_comp:
+                        index_comp[n] = len(vocab)
+                        vocab.append(n)
+                    codes.append(index_comp[n])
+                x = codes
+            elif c in ("lat", "lon") and x is not None:
+                x = round(x, 4)
+            ligne.append(x)
+        lignes.append(ligne)
+    return dict(resume, colonnes=COLONNES, competences=vocab, lignes=lignes)
+
+
+def main():
+    jours = sorted((RACINE / "data" / "actives").glob("*.csv"))
+    if not jours:
+        raise SystemExit("Aucune extraction : lancez d'abord scripts/extraire.py")
+    jour, debut = jours[-1].stem, jours[0].stem
+    nb_versions = sum(1 for f in (RACINE / "data" / "brut").glob("*/*.jsonl")
+                      for l in f.open(encoding="utf-8") if l.strip())
+
+    serie = defaultdict(dict)          # série : par jour et par métier
+    with (RACINE / "data" / "serie.csv").open(encoding="utf-8") as f:
+        for r in csv.DictReader(f):
+            serie[r["date"]][r["rome"]] = int(r["total"])
+
+    geo = Geocodeur()
+    for historique in (False, True):
+        offres, stats = construire(jour, geo, historique)
+        resume = resume_de(offres, jour, serie, nb_versions, historique, debut)
+        if historique:
+            contenu = compacter(resume, offres)
+            sortie = RACINE / "data" / "historique.json"
+        else:
+            contenu = dict(resume, offres=offres)
+            sortie = RACINE / "data" / "resume.json"
+        sortie.write_text(json.dumps(contenu, ensure_ascii=False, separators=(",", ":")), encoding="utf-8")
+        print(f"\nÉcrit : {sortie.relative_to(RACINE)} — {len(offres)} offres "
+              f"({'historique depuis le ' + debut if historique else 'actuelles au ' + jour}), "
+              f"{sortie.stat().st_size // 1024} Ko")
+        print("Sources : " + ", ".join(f"{n} {k} ({d} doublons écartés)" for n, (k, d) in stats.items()))
+        avec = [o for o in offres if o["smin"] is not None]
+        print(f"Salaire affiché par {len(avec)} offres sur {len(offres)} "
+              f"({100 * len(avec) // len(offres) if offres else 0} %)")
+    geo.sauver()
+    print(f"Positions : {geo.appels} appels geo.api.gouv.fr")
 
 
 if __name__ == "__main__":
