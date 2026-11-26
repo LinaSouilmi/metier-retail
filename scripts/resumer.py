@@ -455,11 +455,35 @@ def offres_adzuna(jour, geo, cles_ft):
             "temps": {"full_time": "plein", "part_time": "partiel"}.get(o.get("contract_time")),
             "postes": 1,
         }
+        offres.append(offre)
+    offres, republiees = sans_republications(offres)
+    print(f"Adzuna : {republiees} republications de la même annonce écartées")
+    retenues = []
+    for offre in offres:
         if offre in cles_ft:
             doublons += 1
             continue
-        offres.append(offre)
-    return offres, doublons
+        retenues.append(offre)
+    return retenues, doublons
+
+
+def sans_republications(offres):
+    """Une annonce republiée reçoit un nouvel identifiant chez Adzuna : sur 45 jours, elle s'accumule
+    (constat du 26/11/2026 : 26 562 offres pour 16 668 annonces distinctes, dont une offre Carrefour
+    présente 71 fois). On n'en garde qu'une par intitulé + employeur (normalisés) + lieu exact,
+    la plus récente. Deux magasins d'une même enseigne ont des lieux différents : ils restent deux.
+    Sans employeur, on ne peut pas trancher : l'offre est gardée."""
+    gardees, sans_employeur = {}, []
+    for o in offres:
+        t, e, _ = cle_doublon(o)
+        if not e:
+            sans_employeur.append(o)
+            continue
+        cle = (t, e, normaliser(o.get("lieu")))
+        if cle not in gardees or (o["date"] or "", o["vu_le"]) > (gardees[cle]["date"] or "", gardees[cle]["vu_le"]):
+            gardees[cle] = o
+    resultat = list(gardees.values()) + sans_employeur
+    return resultat, len(offres) - len(resultat)
 
 
 DIPLOMES_EUROPEENS = {"3": "< Bac", "4": "Bac", "5": "Bac+2", "6": "Bac+3/4", "7": "Bac+5"}
