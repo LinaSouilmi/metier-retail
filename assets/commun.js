@@ -76,6 +76,25 @@ Chart.defaults.font.family = "system-ui, -apple-system, 'Segoe UI', sans-serif";
 Chart.defaults.plugins.legend.display = false;
 
 let D, graphiques = {};
+
+// Période affichée : « actuelles » (data/resume.json) ou « historique » (data/historique.json).
+let PERIODE = "actuelles";
+try { if (localStorage.getItem("metiers-periode") === "historique") PERIODE = "historique"; } catch (e) {}
+
+/* historique.json est compact : une ligne par offre dans l'ordre de « colonnes », outils et
+   compétences codés par leur numéro. On reconstruit les mêmes objets que dans resume.json. */
+function deplier(d) {
+  const cols = d.colonnes, outils = d.outils, comp = d.competences || [];
+  d.offres = d.lignes.map(l => {
+    const o = {};
+    for (let i = 0; i < cols.length; i++) o[cols[i]] = l[i];
+    o.outils = (o.outils || []).map(k => outils[k]);
+    o.competences = (o.competences || []).map(k => comp[k]);
+    return o;
+  });
+  delete d.lignes;
+  return d;
+}
 let NIVEAUX = NIVEAUX_DEFAUT, FORMATIONS = FORMATIONS_DEFAUT;
 
 /* Famille de contrat d'une offre : l'alternance l'emporte sur le CDI/CDD qui la porte. */
@@ -263,6 +282,19 @@ function poserNavEtFiltres() {
     `<a href="${url}"${url === PAGE_ICI ? ' class="ici" aria-current="page"' : ""}>${lib}</a>`).join("") + `</nav>`;
 
   const f = document.getElementById("filtres-ici");
+  // Période : la photo du jour, ou tout ce qui a été vu depuis le début (mémorisé d'une page à l'autre).
+  const per = PERIODE === "historique";
+  if (f) f.insertAdjacentHTML("beforebegin",
+    `<div class="carte periode" style="display:flex;flex-wrap:wrap;gap:6px 18px;align-items:center;padding:10px 16px">
+       <b>Période</b>
+       <label><input type="radio" name="periode" value="actuelles"${per ? "" : " checked"}> Offres actuelles</label>
+       <label><input type="radio" name="periode" value="historique"${per ? " checked" : ""}> Toutes les offres depuis le début</label>
+       <small id="note-periode" style="color:#6e6e73"></small>
+     </div>`);
+  document.querySelectorAll('input[name="periode"]').forEach(i => i.addEventListener("change", () => {
+    try { localStorage.setItem("metiers-periode", i.value); } catch (e) {}
+    location.reload();
+  }));
   if (f) f.outerHTML = (PAGE_ICI === "index.html"
     // Accueil : le panneau est déplié, c'est le point de départ.
     ? `<div class="carte">${HTML_FILTRES}</div>`
@@ -322,8 +354,11 @@ const Commun = {
   demarrer(rendre, initier) {
     Commun.rendre = rendre;
     poserNavEtFiltres();
+    const sousAttente = document.getElementById("sous");
+    if (sousAttente && PERIODE === "historique") sousAttente.textContent = "Chargement de l'historique (fichier volumineux, quelques secondes)…";
     // GitHub Pages met le JSON en cache 10 minutes : on le redemande frais à chaque chargement.
-    fetch("data/resume.json", { cache: "no-cache" }).then(r => r.json()).then(d => {
+    fetch(PERIODE === "historique" ? "data/historique.json" : "data/resume.json", { cache: "no-cache" }).then(r => r.json()).then(d => {
+      if (d.lignes) d = deplier(d);
       if (!d.metiers || !d.offres) throw new Error("ancien format de resume.json — rechargez la page (Ctrl+F5)");
       D = d;
       Commun.D = d;
@@ -332,8 +367,13 @@ const Commun = {
       if (Array.isArray(d.formations) && d.formations.length) FORMATIONS = d.formations;
 
       const sous = document.getElementById("sous");
-      if (sous) sous.innerHTML =
-        `${d.source} · ${d.requete} · extraction du <b>${dateFr(d.date)}</b> · ${d.offres.length} offres actives, ${d.versions_conservees} versions d'annonces conservées`;
+      if (sous) sous.innerHTML = d.periode === "historique"
+        ? `<b>Historique</b> : toutes les offres vues au moins une fois du <b>${dateFr(d.debut)}</b> au <b>${dateFr(d.date)}</b> · ${d.offres.length} offres, doublons écartés · ${d.source}`
+        : `${d.source} · ${d.requete} · extraction du <b>${dateFr(d.date)}</b> · ${d.offres.length} offres actives, ${d.versions_conservees} versions d'annonces conservées`;
+      const note = document.getElementById("note-periode");
+      if (note) note.textContent = d.periode === "historique"
+        ? "Cumul sur toute la période : ce ne sont pas autant de postes ouverts en même temps."
+        : "Offres en ligne à la dernière collecte (Adzuna : publiées depuis moins de 45 jours).";
 
       let memo = null;
       try { memo = JSON.parse(localStorage.getItem("metiers-filtres")); } catch (e) {}
